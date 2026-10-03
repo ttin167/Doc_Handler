@@ -1,0 +1,26 @@
+geometry:
+  page_size: Letter
+  margin:
+    top: 0.63in
+    bottom: 0.87in
+    left: 1.00in
+    right: 0.55in
+typography:
+  font_family: Calibri, Arial, sans-serif
+  font_size: 11pt
+  body_color: '#000000'
+  line_spacing: 1.15
+headings:
+  color: '#C00000'
+  h1_size: 16pt
+  h2_size: 13pt
+  h3_size: 12pt
+  h4_size: 11pt
+tables:
+  header_background: '#FFE8E0'
+  border_color: '#000000'
+  cell_padding: 6pt
+lists:
+  bullet_glyph: •
+  space_before: 2pt
+  space_after: 2pt
