@@ -244,6 +244,24 @@ def compile_markdown_file_to_pptx(
     )
 
 
+def compile_markdown_to_presentation(
+    md_text: str,
+    output_pptx_path: str,
+    theme_name: str = "corporate_blue",
+    template_path: Optional[str] = None,
+) -> str:
+    """
+    Directly compiles a Markdown slide deck string into a .pptx presentation.
+    """
+    spec = parse_markdown_to_slides_spec(md_text, default_theme=theme_name)
+    return write_pptx_from_spec(
+        spec=spec,
+        output_path=output_pptx_path,
+        theme_name=theme_name,
+        template_path=template_path,
+    )
+
+
 def insert_diagram_into_pptx(
     pptx_path: str,
     image_path: str,

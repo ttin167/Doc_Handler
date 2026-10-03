@@ -60,6 +60,7 @@ exclude = ["tests*", "scratch*"]
 
 [tool.pyrefly]
 search-path = ["."]
+disable-search-path-heuristics = true
 
 [tool.pyright]
 extraPaths = ["."]

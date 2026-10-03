@@ -11,11 +11,16 @@ import os
 import re
 import sys
 import yaml
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import pymupdf
 import docx
-from docx.shared import Pt, Inches, RGBColor
+import docx.text
+import docx.text.paragraph
+import docx.table
+import docx.oxml
+from docx.document import Document as DocumentType
+from docx.shared import Pt, Inches, Length, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
@@ -23,6 +28,10 @@ from docx.oxml.ns import nsdecls, qn
 NS_W = nsdecls("w")
 TOC_LINE_REGEX = re.compile(r"^(.*?)(?:\.{2,}|…+|(?:\.\s+){2,}\.|\t)\s*(\d+)$")
 
+try:
+    from .smart_post_processor import calculate_heuristic_column_widths
+except (ImportError, ValueError):
+    from smart_post_processor import calculate_heuristic_column_widths
 
 def _hex_to_rgb(hex_str: str) -> RGBColor:
     cleaned = hex_str.lstrip("#")
@@ -37,7 +46,7 @@ def _hex_to_rgb(hex_str: str) -> RGBColor:
     return RGBColor(30, 41, 59)
 
 
-def _parse_length(val: Any, default_inches: float = 1.0) -> Inches:
+def _parse_length(val: Any, default_inches: float = 1.0) -> Union[Inches, Pt, Length]:
     if val is None:
         return Inches(default_inches)
     if isinstance(val, (int, float)):
@@ -186,7 +195,7 @@ def extract_pdf_styling_metadata(doc: pymupdf.Document) -> Dict[str, Any]:
     }
 
 
-def extract_docx_styling_metadata(doc: docx.Document) -> Dict[str, Any]:
+def extract_docx_styling_metadata(doc: DocumentType) -> Dict[str, Any]:
     """Extract geometry and styling schema from an existing DOCX document."""
     sec = doc.sections[0]
     p_w = sec.page_width.inches if sec.page_width else 8.5
@@ -213,7 +222,8 @@ def extract_docx_styling_metadata(doc: docx.Document) -> Dict[str, Any]:
             if r.font.color and r.font.color.rgb:
                 hex_c = f"#{r.font.color.rgb}"
                 colors[hex_c] = colors.get(hex_c, 0) + len(txt)
-                if p.style.name.startswith("Heading") or r.bold:
+                style_name = (p.style.name if p.style and p.style.name else "")
+                if style_name.startswith("Heading") or r.bold:
                     if hex_c.upper() not in ("#000000", "#FFFFFF", "#1E293B", "#333333", "#202124"):
                         heading_colors[hex_c.upper()] = heading_colors.get(hex_c.upper(), 0) + len(txt)
 
@@ -339,7 +349,7 @@ def docx_to_decoupled(
             if not txt:
                 continue
 
-            style_name = p.style.name.lower()
+            style_name = (p.style.name if p.style and p.style.name else "").lower()
             pPr = p._p.pPr
             has_num = pPr is not None and pPr.find(qn("w:numPr")) is not None
             has_tabs = pPr is not None and pPr.find(qn("w:tabs")) is not None
@@ -496,7 +506,10 @@ def decoupled_to_docx(
 
     # Calculate Tab Stop position at right margin
     try:
-        printable_w = sec.page_width - sec.left_margin - sec.right_margin
+        pw = sec.page_width or Inches(8.5)
+        lm = sec.left_margin or Inches(1.0)
+        rm = sec.right_margin or Inches(1.0)
+        printable_w = int(pw) - int(lm) - int(rm)
         tab_pos_twips = int(printable_w / 635)
     except Exception:
         tab_pos_twips = 9360
@@ -530,7 +543,19 @@ def decoupled_to_docx(
             return
         col_count = max(len(row) for row in table_buffer)
         t = doc.add_table(rows=len(table_buffer), cols=col_count)
-        t.autofit = True
+        t.autofit = False  # Enforce explicit heuristic column geometry
+
+        # Calculate heuristic column widths based on Square Root Damped Weighting
+        total_w_twips = tab_pos_twips or 9360
+        col_widths_twips = calculate_heuristic_column_widths(table_buffer, total_w_twips)
+
+        # Set <w:tblGrid>
+        tblGrid = t._tbl.tblGrid
+        if tblGrid is not None:
+            for cg in list(tblGrid):
+                tblGrid.remove(cg)
+            for w_tw in col_widths_twips:
+                tblGrid.append(parse_xml(f'<w:gridCol {NS_W} w:w="{w_tw}"/>'))
 
         for r_idx, row_data in enumerate(table_buffer):
             row = t.rows[r_idx]
@@ -543,6 +568,13 @@ def decoupled_to_docx(
             for c_idx, val in enumerate(row_data):
                 if c_idx < len(row.cells):
                     cell = row.cells[c_idx]
+                    if c_idx < len(col_widths_twips):
+                        cell.width = Inches(col_widths_twips[c_idx] / 1440.0)
+
+                    tcPr = cell._tc.get_or_add_tcPr()
+                    if tcPr.find(qn("w:vAlign")) is None:
+                        tcPr.append(parse_xml(f'<w:vAlign {NS_W} w:val="center"/>'))
+
                     cell.text = val
                     for cp in cell.paragraphs:
                         for cr in cp.runs:

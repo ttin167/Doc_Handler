@@ -11,8 +11,10 @@ from typing import Callable, List, Optional, Tuple
 
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stdout, "reconfigure"):
+            getattr(sys.stdout, "reconfigure")(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            getattr(sys.stderr, "reconfigure")(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -198,6 +200,20 @@ def convert_file(
     except Exception as exc:
         elapsed = time.time() - start_time
         return False, str(exc), elapsed
+
+
+def convert_pdf_to_docx_flow(
+    pdf_path: str,
+    docx_path: Optional[str] = None,
+    page_range: Optional[str] = None,
+    engine: str = "pdf2docx",
+    progress_callback: Optional[Callable[[float, str], None]] = None
+) -> Tuple[bool, str]:
+    """Convenience wrapper returning (ok, actual_docx_path) for Markdown pipeline stages."""
+    ok, res, _ = convert_file(
+        pdf_path, docx_path, page_range=page_range, engine=engine, progress_callback=progress_callback
+    )
+    return ok, res
 
 
 def convert_universal(

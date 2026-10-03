@@ -56,6 +56,7 @@ class TestExcelCoreEngine(unittest.TestCase):
         # 1. Create a mock template workbook
         wb = openpyxl.Workbook()
         ws = wb.active
+        assert ws is not None
         ws.title = "Test Cases"
 
         # Title
@@ -171,6 +172,7 @@ class TestExcelCoreEngine(unittest.TestCase):
         """Verify expand_table_columns clones column width, header/cell formatting, and shifts formulas."""
         wb = openpyxl.Workbook()
         ws = wb.active
+        assert ws is not None
         ws.title = "Matrix"
 
         # Setup base columns
@@ -204,6 +206,7 @@ class TestExcelCoreEngine(unittest.TestCase):
 
         wb = openpyxl.Workbook()
         ws = wb.active
+        assert ws is not None
         ws.title = "ChartSheet"
 
         ws["A1"] = "Status"
@@ -237,6 +240,13 @@ class TestExcelCoreEngine(unittest.TestCase):
         from xlsx_reader import read_xlsx
 
         mock_path = os.path.join(self.output_dir, "mock_template.xlsx")
+        if not os.path.isfile(mock_path):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            assert ws is not None
+            ws.title = "Test Cases"
+            ws["A1"] = "Test Header"
+            wb.save(mock_path)
         self.assertTrue(os.path.isfile(mock_path))
 
         snapshot = read_xlsx(mock_path, engine="openpyxl")
@@ -251,6 +261,7 @@ class TestExcelCoreEngine(unittest.TestCase):
         # Find cell A1
         a1_cell = next((c for c in sheet0["cells"] if c["address"] == "A1"), None)
         self.assertIsNotNone(a1_cell)
+        assert a1_cell is not None
         self.assertIn("PROJECT:", a1_cell["value"])
         self.assertTrue(a1_cell["format"]["bold"])
 

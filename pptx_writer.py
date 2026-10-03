@@ -27,6 +27,7 @@ except ImportError:
 
 import pptx
 from pptx import Presentation
+from pptx.presentation import Presentation as PresentationType
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
@@ -99,7 +100,7 @@ def get_theme(theme_name: str) -> Dict[str, Any]:
 # Resilience & File Lock Management
 # ---------------------------------------------------------------------------
 
-def safe_save_pptx(prs: Presentation, target_path: str) -> str:
+def safe_save_pptx(prs: PresentationType, target_path: str) -> str:
     """
     Saves a PowerPoint presentation. If the target file is locked by MS PowerPoint,
     gracefully saves to a timestamped or fallback path to prevent crash (PPTX_INV_07).
@@ -124,7 +125,7 @@ def safe_save_pptx(prs: Presentation, target_path: str) -> str:
 # Presentation Initialization
 # ---------------------------------------------------------------------------
 
-def init_presentation(template_path: Optional[str] = None) -> Presentation:
+def init_presentation(template_path: Optional[str] = None) -> PresentationType:
     """
     Initializes a PowerPoint presentation. Enforces 16:9 widescreen format (PPTX_INV_01).
     Inherits Slide Master if template_path is provided (PPTX_INV_03).
@@ -286,7 +287,7 @@ def _update_slide_number(slide: Any, num: int, theme: Dict[str, Any]) -> None:
 
 
 def _prepare_slide(
-    prs: Presentation,
+    prs: PresentationType,
     theme: Dict[str, Any],
     target_slide: Optional[Any] = None,
 ) -> Any:
@@ -416,7 +417,7 @@ def _add_slide_header(
 # ---------------------------------------------------------------------------
 
 def add_title_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     subtitle: Optional[str] = None,
     presenter: Optional[str] = None,
@@ -479,7 +480,7 @@ def add_title_slide(
 
 
 def add_chapter_slide(
-    prs: Presentation,
+    prs: PresentationType,
     chapter_num: str,
     title: str,
     subtitle: Optional[str] = None,
@@ -506,7 +507,7 @@ def add_chapter_slide(
 
     # Chapter Number / Category
     p_num = tf.paragraphs[0]
-    p_num.text = str(chapter_num).upper()
+    p_num.text = chapter_num.upper()
     p_num.font.name = theme["font_heading"]
     p_num.font.size = Pt(18)
     p_num.font.bold = True
@@ -534,7 +535,7 @@ def add_chapter_slide(
 
 
 def add_content_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     bullets: List[Any],
     subtitle: Optional[str] = None,
@@ -575,17 +576,36 @@ def add_content_slide(
         tf = tx_box.text_frame
         tf.word_wrap = True
 
+    # Dynamic 2-Tier font sizing calculation if bullet_font_size is default (16.5 or 17.0)
+    effective_font_size = bullet_font_size
+    if bullet_font_size in (16.5, 17.0) and bullets:
+        b_count = len(bullets)
+        total_chars = sum(
+            len(str(b.get("text", b) if isinstance(b, dict) else (b[1] if isinstance(b, (tuple, list)) and len(b) > 1 else b)))
+            for b in bullets
+        )
+        if b_count <= 3 and total_chars < 220:
+            effective_font_size = 18.0
+        elif b_count <= 5 and total_chars < 450:
+            effective_font_size = 16.5
+        elif b_count <= 7:
+            effective_font_size = 15.0
+        else:
+            effective_font_size = 13.5
+
     first = True
     for item in bullets:
         p = tf.paragraphs[0] if first else tf.add_paragraph()
         first = False
-        _format_bullet_paragraph(p, item, theme, font_size_pt=bullet_font_size)
+        _format_bullet_paragraph(p, item, theme, font_size_pt=effective_font_size)
+        if len(bullets) >= 6:
+            p.space_after = Pt(6)
 
     return slide
 
 
 def add_two_column_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     left_bullets: List[Any],
     right_bullets: List[Any],
@@ -629,7 +649,7 @@ def add_two_column_slide(
 
 
 def add_diagram_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     image_path: str,
     caption: Optional[str] = None,
@@ -712,7 +732,7 @@ def add_diagram_slide(
 
 
 def add_split_diagram_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     bullets: List[Any],
     image_path: str,
@@ -803,7 +823,7 @@ def add_split_diagram_slide(
 
 
 def add_dual_diagram_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     bullets: List[Any],
     img1_path: str,
@@ -919,7 +939,7 @@ def add_dual_diagram_slide(
 
 
 def add_metrics_summary_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     cards: List[Dict[str, Any]],
     summary_bullets: Optional[List[Any]] = None,
@@ -1019,7 +1039,7 @@ def add_metrics_summary_slide(
 
 
 def add_thank_you_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str = "THANK YOU FOR LISTENING!",
     subtitle: Optional[str] = None,
     presenter: Optional[str] = None,
@@ -1098,7 +1118,7 @@ def add_thank_you_slide(
 
 
 def add_kpi_cards_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     cards: List[Dict[str, str]],
     subtitle: Optional[str] = None,
@@ -1144,7 +1164,7 @@ def add_kpi_cards_slide(
         p_title.font.color.rgb = theme["subtitle_color"]
         p_title.space_after = Pt(12)
 
-        val_str = str(cdata.get("value", "0"))
+        val_str = cdata.get("value", "0")
         p_val = tf.add_paragraph()
         p_val.text = val_str
         p_val.font.name = theme["font_heading"]
@@ -1165,7 +1185,7 @@ def add_kpi_cards_slide(
 
 
 def add_grid_cards_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     cards: List[Dict[str, str]],
     subtitle: Optional[str] = None,
@@ -1231,7 +1251,7 @@ def add_grid_cards_slide(
 
 
 def add_table_slide(
-    prs: Presentation,
+    prs: PresentationType,
     title: str,
     headers: List[str],
     rows: List[List[Any]],
@@ -1259,7 +1279,7 @@ def add_table_slide(
         cell.fill.solid()
         cell.fill.fore_color.rgb = theme["title_color"]
         p = cell.text_frame.paragraphs[0]
-        p.text = str(h_text)
+        p.text = h_text
         p.font.name = theme["font_heading"]
         p.font.bold = True
         p.font.size = Pt(14)
@@ -1287,6 +1307,47 @@ def add_table_slide(
     return slide
 
 
+def paginate_slide_specs(
+    slides_data: List[Dict[str, Any]],
+    max_bullets_threshold: int = 7,
+    max_chars_threshold: int = 550,
+) -> List[Dict[str, Any]]:
+    """
+    Auto-paginates content slides that exceed safe presentation density.
+    If a content slide has > 7 bullets or high text volume (> 550 chars / > 9 estimated lines),
+    it is automatically split into consecutive slides with the EXACT SAME title (no suffix).
+    """
+    paginated: List[Dict[str, Any]] = []
+    for s in slides_data:
+        stype = s.get("type", "content")
+        # Only paginate generative content slides (not in-place targeted slides unless explicitly requested)
+        if stype == "content" and s.get("auto_paginate", True) and s.get("slide_index") is None:
+            bullets = s.get("bullets", [])
+            if isinstance(bullets, list) and len(bullets) > 0:
+                total_chars = sum(
+                    len(str(b.get("text", b) if isinstance(b, dict) else (b[1] if isinstance(b, (tuple, list)) and len(b) > 1 else b)))
+                    for b in bullets
+                )
+
+                # Check overflow condition: > 7 bullets OR (>= 5 bullets and high char count)
+                if len(bullets) > max_bullets_threshold or (len(bullets) >= 5 and total_chars > max_chars_threshold):
+                    # Balance bullets across chunks (e.g. 10 -> [5, 5]; 8 -> [4, 4]; 12 -> [6, 6])
+                    num_splits = max(2, (len(bullets) + max_bullets_threshold - 1) // max_bullets_threshold)
+                    chunk_size = (len(bullets) + num_splits - 1) // num_splits
+                    chunk_size = max(3, min(chunk_size, 6))
+
+                    chunks = [bullets[i:i + chunk_size] for i in range(0, len(bullets), chunk_size)]
+                    for chunk in chunks:
+                        new_s = dict(s)
+                        new_s["bullets"] = chunk
+                        # Exact same title (no suffix per user requirement)
+                        paginated.append(new_s)
+                    continue
+
+        paginated.append(s)
+    return paginated
+
+
 # ---------------------------------------------------------------------------
 # High-Level Spec Dispatcher
 # ---------------------------------------------------------------------------
@@ -1307,7 +1368,8 @@ def write_pptx_from_spec(
     prs = init_presentation(template_path=tpl)
 
     is_in_place = spec.get("mode") == "in_place_template" or bool(tpl and spec.get("in_place", False))
-    slides_data = spec.get("slides", [])
+    raw_slides_data = spec.get("slides", [])
+    slides_data = paginate_slide_specs(raw_slides_data) if not is_in_place else raw_slides_data
 
     for s_idx, s in enumerate(slides_data):
         stype = s.get("type", "content")

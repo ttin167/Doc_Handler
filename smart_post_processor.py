@@ -14,15 +14,22 @@ import re
 import shutil
 import time
 import zipfile
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any, Union
 
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stdout, "reconfigure"):
+            getattr(sys.stdout, "reconfigure")(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            getattr(sys.stderr, "reconfigure")(encoding="utf-8", errors="replace")
     except Exception:
         pass
 import docx
+import docx.text
+import docx.text.paragraph
+import docx.table
+import docx.oxml
+from docx.document import Document as DocumentType
 from docx.shared import Pt, Inches, RGBColor
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls, qn
@@ -119,7 +126,7 @@ def apply_tab_stop_to_paragraph(
     r_page.font.color.rgb = DARK_COLOR
 
 
-def ensure_canonical_numbering(doc: docx.Document) -> str:
+def ensure_canonical_numbering(doc: DocumentType) -> str:
     """
     Inject or verify canonical abstract numbering definition in word/numbering.xml:
     - Level 0 (ilvl=0): Bullet symbol (\uf06c), font Wingdings, size 24 (12pt), matching ApowerPDF.
@@ -186,7 +193,7 @@ def ensure_canonical_numbering(doc: docx.Document) -> str:
     return CANONICAL_NUM_ID
 
 
-def stitch_broken_tables(doc: docx.Document) -> int:
+def stitch_broken_tables(doc: DocumentType) -> int:
     """
     Auto-stitch tables that were split across page breaks by PDF layout analyzers.
     Detects pairs where Table B immediately follows Table A with only page numbers or blank paragraphs.
@@ -243,7 +250,128 @@ def stitch_broken_tables(doc: docx.Document) -> int:
     return stitched_count
 
 
-def apply_table_pagination_rules(doc: docx.Document, table_header_bg: str = "FFE8E0") -> None:
+def calculate_heuristic_column_widths(
+    table_data: List[List[str]],
+    total_width_twips: int = 9360,
+    min_col_ratio: float = 0.08,
+    max_col_ratio: float = 0.55,
+) -> List[int]:
+    """
+    Computes balanced, proportional column widths using Square Root Damped Weighting.
+    
+    Algorithm:
+    1. Measures maximum character length in each column across header and all data rows.
+    2. Applies non-linear damping: weight_c = sqrt(max(length, 2)).
+    3. Normalizes weights to total table printable width.
+    4. Applies lower bound (min_col_ratio, ~8% for short codes/IDs) and
+       upper bound (max_col_ratio, ~55% to prevent long descriptions from consuming the entire width).
+    5. Re-normalizes to ensure the exact sum matches total_width_twips.
+    """
+    if not table_data or not table_data[0]:
+        return []
+
+    num_cols = max(len(row) for row in table_data)
+    if num_cols <= 1:
+        return [total_width_twips]
+
+    import math
+    max_lens = [2] * num_cols
+    for row in table_data:
+        for c_idx, val in enumerate(row):
+            if c_idx < num_cols:
+                clean_txt = (val or "").strip()
+                max_lens[c_idx] = max(max_lens[c_idx], len(clean_txt))
+
+    weights = [math.sqrt(max(l, 2)) for l in max_lens]
+    total_w = sum(weights) or 1.0
+
+    min_w = max(400, int(total_width_twips * min_col_ratio))
+    max_w = int(total_width_twips * max_col_ratio)
+
+    raw_widths = [int((w / total_w) * total_width_twips) for w in weights]
+    clamped = [max(min_w, min(max_w, w)) for w in raw_widths]
+
+    diff = total_width_twips - sum(clamped)
+    if diff > 0:
+        candidates = [i for i in range(num_cols) if clamped[i] < max_w] or list(range(num_cols))
+        while diff > 0:
+            progress = False
+            for idx in sorted(candidates, key=lambda i: weights[i], reverse=True):
+                if diff <= 0:
+                    break
+                can_add = min(diff, max(1, max_w - clamped[idx]))
+                clamped[idx] += can_add
+                diff -= can_add
+                progress = True
+            if not progress:
+                clamped[0] += diff
+                break
+    elif diff < 0:
+        for idx in sorted(range(num_cols), key=lambda i: clamped[i], reverse=True):
+            if diff >= 0:
+                break
+            can_sub = min(-diff, max(0, clamped[idx] - min_w))
+            if can_sub > 0:
+                clamped[idx] -= can_sub
+                diff += can_sub
+
+    return clamped
+
+
+def apply_heuristic_table_widths(
+    table: docx.table.Table,
+    table_data: Optional[List[List[str]]] = None,
+    total_width_twips: int = 9360,
+) -> List[int]:
+    """
+    Applies heuristic column widths and OpenXML invariants (<w:cantSplit/>, <w:vAlign/>, tblGrid)
+    to a Word table.
+    """
+    if not table.rows:
+        return []
+
+    num_cols = len(table.columns)
+    if num_cols == 0:
+        return []
+
+    if not table_data:
+        table_data = []
+        for row in table.rows:
+            table_data.append([c.text.strip() for c in row.cells])
+
+    col_widths_twips = calculate_heuristic_column_widths(table_data, total_width_twips)
+
+    # 1. Disable autofit so explicit grid widths are strictly obeyed
+    table.autofit = False
+
+    # 2. Configure <w:tblGrid>
+    tblGrid = table._tbl.tblGrid
+    if tblGrid is not None:
+        for cg in list(tblGrid):
+            tblGrid.remove(cg)
+        for w_tw in col_widths_twips:
+            tblGrid.append(parse_xml(f'<w:gridCol {NS_W} w:w="{w_tw}"/>'))
+
+    # 3. Apply width and vertical centering to each cell
+    for r_idx, row in enumerate(table.rows):
+        trPr = row._tr.get_or_add_trPr()
+        if trPr.find(qn("w:cantSplit")) is None:
+            trPr.append(parse_xml(f'<w:cantSplit {NS_W}/>'))
+        if r_idx == 0 and len(table.rows) > 1:
+            if trPr.find(qn("w:tblHeader")) is None:
+                trPr.append(parse_xml(f'<w:tblHeader {NS_W}/>'))
+
+        for c_idx, cell in enumerate(row.cells):
+            if c_idx < len(col_widths_twips):
+                cell.width = Inches(col_widths_twips[c_idx] / 1440.0)
+            tcPr = cell._tc.get_or_add_tcPr()
+            if tcPr.find(qn("w:vAlign")) is None:
+                tcPr.append(parse_xml(f'<w:vAlign {NS_W} w:val="center"/>'))
+
+    return col_widths_twips
+
+
+def apply_table_pagination_rules(doc: DocumentType, table_header_bg: str = "FFE8E0") -> None:
     """
     Protect table layout from awkward row splits and apply authentic header styling:
     - Sets <w:cantSplit/> on all table rows so rows are never split across pages.
@@ -352,7 +480,7 @@ def extract_pdf_semantic_map(pdf_path: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def separate_merged_heading_paragraphs(doc: docx.Document, red_headings: Dict[str, float]) -> int:
+def separate_merged_heading_paragraphs(doc: DocumentType, red_headings: Dict[str, float]) -> int:
     """
     Detects headings that were accidentally merged with body text or list entries by pdf2docx
     (e.g., 'List of Tables \\nTable 1 - Definition and Acronyms...').
@@ -429,7 +557,7 @@ def separate_merged_heading_paragraphs(doc: docx.Document, red_headings: Dict[st
     return separated_count
 
 
-def heal_missing_table_text(doc: docx.Document, pdf_path: Optional[str] = None) -> int:
+def heal_missing_table_text(doc: DocumentType, pdf_path: Optional[str] = None) -> int:
     """
     Heal empty cells in tables that were dropped by pdf2docx (e.g. hyperlinked emails or URLs).
     Cross-references the source PDF text words and hyperlink annotations.
@@ -499,7 +627,7 @@ def heal_missing_table_text(doc: docx.Document, pdf_path: Optional[str] = None) 
 
 
 def standardize_page_margins(
-    doc: docx.Document,
+    doc: DocumentType,
     target_top_in: float = 0.40,
     target_bottom_in: float = 0.45,
     target_left_in: float = 0.85,
@@ -526,7 +654,7 @@ def standardize_page_margins(
         doc.sections[0].different_first_page_header_footer = True
 
 
-def calibrate_cover_page_and_headings(doc: docx.Document) -> None:
+def calibrate_cover_page_and_headings(doc: DocumentType) -> None:
     """
     Calibrate Cover Page and Headings alignment and vertical spacing:
     - Splits accidentally merged cover page lines ('FPT UNIVERSITY\\nCapstone Project Document').
@@ -626,7 +754,7 @@ def calibrate_cover_page_and_headings(doc: docx.Document) -> None:
                 r.font.size = Pt(13)
 
 
-def process_semantic_lists(doc: docx.Document, num_id: str) -> int:
+def process_semantic_lists(doc: DocumentType, num_id: str) -> int:
     """
     Robust Semantic List Engine:
     1. Glyph Stripping: Cuts PUA garbage (\\uf06c, \\uf0b7), Unicode bullets (•), and (+, -) from text.
@@ -706,7 +834,7 @@ def process_semantic_lists(doc: docx.Document, num_id: str) -> int:
 
 
 
-def normalize_line_and_paragraph_spacing(doc: docx.Document) -> int:
+def normalize_line_and_paragraph_spacing(doc: DocumentType) -> int:
     """
     Scan all paragraphs across body text and table cells:
     1. Detect any paragraph with w:line < 240 twips (which clips font ascenders/descenders).
@@ -762,7 +890,7 @@ def normalize_line_and_paragraph_spacing(doc: docx.Document) -> int:
     return fixed_count
 
 
-def clean_redundant_blank_paragraphs(doc: docx.Document) -> int:
+def clean_redundant_blank_paragraphs(doc: DocumentType) -> int:
     """
     Remove empty paragraphs that waste vertical space in and around
     Table of Contents, List of Tables, and List of Figures to prevent page overflows.
@@ -793,7 +921,7 @@ def clean_redundant_blank_paragraphs(doc: docx.Document) -> int:
     return removed_count
 
 
-def validate_numbering_integrity(doc: docx.Document) -> bool:
+def validate_numbering_integrity(doc: DocumentType) -> bool:
     """
     Pre-zip Validation:
     Guarantees every numId referenced in document.xml exists in numbering.xml.
@@ -828,7 +956,7 @@ def validate_numbering_integrity(doc: docx.Document) -> bool:
     return True
 
 
-def safe_save_docx(doc: docx.Document, target_path: str, max_retries: int = 3, retry_delay: float = 1.5) -> str:
+def safe_save_docx(doc: DocumentType, target_path: str, max_retries: int = 3, retry_delay: float = 1.5) -> str:
     """
     Hybrid File Locking Strategy:
     1. Retries up to max_retries if file is temporarily locked by Word.
@@ -1152,7 +1280,10 @@ def post_process_docx(docx_path: str, pdf_path: Optional[str] = None) -> Tuple[b
         tab_pos = 9360
         try:
             sec = doc.sections[0]
-            printable_w = sec.page_width - sec.left_margin - sec.right_margin
+            pw = sec.page_width or Inches(8.5)
+            lm = sec.left_margin or Inches(1.0)
+            rm = sec.right_margin or Inches(1.0)
+            printable_w = int(pw) - int(lm) - int(rm)
             tab_pos = int(printable_w / 635)
         except Exception:
             tab_pos = 9360

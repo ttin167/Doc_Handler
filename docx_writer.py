@@ -33,6 +33,7 @@ import shutil
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from docx import Document
+from docx.document import Document as DocumentType
 from docx.shared import Pt, RGBColor, Cm, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.section import WD_SECTION, WD_ORIENT
@@ -40,6 +41,11 @@ from docx.oxml.ns import qn, nsdecls
 from docx.oxml import OxmlElement, parse_xml
 
 from PIL import Image as PILImage
+
+try:
+    from .smart_post_processor import calculate_heuristic_column_widths
+except (ImportError, ValueError):
+    from smart_post_processor import calculate_heuristic_column_widths
 
 __all__ = [
     "write_docx",
@@ -151,7 +157,7 @@ def _apply_paragraph_format(para, para_data: dict[str, Any]) -> None:
         _set_keep_next(para)
 
 
-def _resolve_style(doc: Document, style_name: str):
+def _resolve_style(doc: DocumentType, style_name: str):
     """
     Return the style object from doc matching style_name.
     Falls back to 'Normal' if not found.
@@ -253,7 +259,7 @@ def _set_row_flags(tr_elem, is_header: bool = False, cant_split: bool = True) ->
 # Element Writers (Paragraph, Image, Table, Section)
 # ---------------------------------------------------------------------------
 
-def _write_paragraph(doc: Document, para_data: dict[str, Any], anchor_para=None) -> Any:
+def _write_paragraph(doc: DocumentType, para_data: dict[str, Any], anchor_para=None) -> Any:
     """Writes a styled paragraph with run-level formatting."""
     style_name = para_data.get("style_name", "Normal")
     style = _resolve_style(doc, style_name)
@@ -311,7 +317,7 @@ def _resolve_image_stream(img_data: dict[str, Any]) -> Tuple[Optional[io.BytesIO
     return None, "No path or Base64 data provided in image spec"
 
 
-def _write_fallback_card(doc: Document, title: str, error_msg: str, width_cm: float = 14.0) -> None:
+def _write_fallback_card(doc: DocumentType, title: str, error_msg: str, width_cm: float = 14.0) -> None:
     """Renders an elegant gray placeholder card when an image cannot be loaded."""
     table = doc.add_table(rows=1, cols=1)
     table.style = "Table Grid"
@@ -341,7 +347,7 @@ def _write_fallback_card(doc: Document, title: str, error_msg: str, width_cm: fl
     _ensure_cell_has_paragraph(tc)
 
 
-def _embed_image_element(doc: Document, img_data: dict[str, Any], anchor_para=None) -> None:
+def _embed_image_element(doc: DocumentType, img_data: dict[str, Any], anchor_para=None) -> None:
     """
     Embeds a real image into the DOCX with printable margin constraint enforcement (ERR_DOCX_005)
     and graceful fallback placeholder card.
@@ -355,12 +361,17 @@ def _embed_image_element(doc: Document, img_data: dict[str, Any], anchor_para=No
 
     # Calculate dimensions and enforce ERR_DOCX_005 (printable margin limit)
     current_sec = doc.sections[-1]
-    usable_width_cm = (current_sec.page_width.cm - current_sec.left_margin.cm - current_sec.right_margin.cm)
+    pw = current_sec.page_width or Cm(21.0)
+    lm = current_sec.left_margin or Cm(2.54)
+    rm = current_sec.right_margin or Cm(2.54)
+    usable_width_cm = pw.cm - lm.cm - rm.cm
     if usable_width_cm <= 0:
         usable_width_cm = 15.0
 
-    target_w_cm = img_data.get("width_cm")
-    target_h_cm = img_data.get("height_cm")
+    raw_w = img_data.get("width_cm")
+    raw_h = img_data.get("height_cm")
+    target_w_cm: Optional[float] = float(raw_w) if raw_w is not None else None
+    target_h_cm: Optional[float] = float(raw_h) if raw_h is not None else None
 
     try:
         # Inspect image aspect ratio with PIL
@@ -376,14 +387,17 @@ def _embed_image_element(doc: Document, img_data: dict[str, Any], anchor_para=No
             final_w_cm = min(usable_width_cm, 14.5)
             final_h_cm = final_w_cm / aspect
         elif target_w_cm is not None and target_h_cm is None:
-            final_w_cm = min(float(target_w_cm), usable_width_cm)
+            final_w_cm = min(target_w_cm, usable_width_cm)
             final_h_cm = final_w_cm / aspect
         elif target_w_cm is None and target_h_cm is not None:
-            final_h_cm = float(target_h_cm)
+            final_h_cm = target_h_cm
             final_w_cm = min(final_h_cm * aspect, usable_width_cm)
+        elif target_w_cm is not None and target_h_cm is not None:
+            final_w_cm = min(target_w_cm, usable_width_cm)
+            final_h_cm = target_h_cm
         else:
-            final_w_cm = min(float(target_w_cm), usable_width_cm)
-            final_h_cm = float(target_h_cm)
+            final_w_cm = min(usable_width_cm, 14.5)
+            final_h_cm = final_w_cm / aspect
 
         # Add image paragraph
         align_str = str(img_data.get("alignment", "CENTER")).upper()
@@ -425,7 +439,7 @@ def _embed_image_element(doc: Document, img_data: dict[str, Any], anchor_para=No
         _write_fallback_card(doc, alt, f"Failed to render image binary: {ex}")
 
 
-def _write_table(doc: Document, table_data: dict[str, Any], anchor_para=None) -> Any:
+def _write_table(doc: DocumentType, table_data: dict[str, Any], anchor_para=None) -> Any:
     """
     Constructs a production-grade OpenXML table supporting:
     - Merged cells with colspan & rowspan via automated grid mapping.
@@ -555,6 +569,46 @@ def _write_table(doc: Document, table_data: dict[str, Any], anchor_para=None) ->
 
             col_cursor = end_c + 1
 
+    # Apply Column Widths (Explicit or Heuristic Auto-Sizing)
+    explicit_widths = table_data.get("col_widths_cm") or table_data.get("col_widths")
+    if explicit_widths and isinstance(explicit_widths, list):
+        col_widths_twips = [int(float(w) * 567.0) for w in explicit_widths]
+    else:
+        text_matrix = []
+        for r_cells in cells_flat:
+            row_txt = []
+            for c in r_cells:
+                txt = c.get("text", "")
+                if not txt and c.get("paragraphs"):
+                    txt = " ".join(p.get("text", "") for p in c["paragraphs"])
+                row_txt.append(str(txt or ""))
+            text_matrix.append(row_txt)
+
+        try:
+            sec = doc.sections[-1]
+            pw = sec.page_width or Inches(8.5)
+            lm = sec.left_margin or Inches(1.0)
+            rm = sec.right_margin or Inches(1.0)
+            avail_w = int((int(pw) - int(lm) - int(rm)) / 635)
+        except Exception:
+            avail_w = 9360
+
+        col_widths_twips = calculate_heuristic_column_widths(text_matrix, total_width_twips=avail_w)
+
+    if col_widths_twips:
+        table.autofit = False
+        tblGrid = table._tbl.tblGrid
+        if tblGrid is not None:
+            for cg in list(tblGrid):
+                tblGrid.remove(cg)
+            for w_tw in col_widths_twips:
+                tblGrid.append(parse_xml(f'<w:gridCol {nsdecls("w")} w:w="{w_tw}"/>'))
+
+        for row in table.rows:
+            for c_idx, cell in enumerate(row.cells):
+                if c_idx < len(col_widths_twips):
+                    cell.width = Inches(col_widths_twips[c_idx] / 1440.0)
+
     # If anchor_para is provided, move table XML before anchor and remove anchor
     if anchor_para is not None:
         anchor_para._p.addprevious(table._tbl)
@@ -565,7 +619,7 @@ def _write_table(doc: Document, table_data: dict[str, Any], anchor_para=None) ->
     return table
 
 
-def _apply_section_break(doc: Document, sec_data: dict[str, Any]) -> Any:
+def _apply_section_break(doc: DocumentType, sec_data: dict[str, Any]) -> Any:
     """
     Inserts a new section break and configures orientation, margins, and header/footer.
     """
@@ -661,7 +715,7 @@ def _replace_text_in_paragraph(paragraph, replacements: dict[str, str]) -> int:
         replaced_in_single_run = False
         for r in runs:
             if key in r.text:
-                r.text = r.text.replace(key, str(val))
+                r.text = r.text.replace(key, val)
                 replaced_in_single_run = True
                 total_replaced += 1
 
@@ -693,7 +747,7 @@ def _replace_text_in_paragraph(paragraph, replacements: dict[str, str]) -> int:
                 # First run gets the replacement text
                 first_start, first_end, first_run = matching_runs[0]
                 prefix = first_run.text[:max(0, k_idx - first_start)]
-                first_run.text = prefix + str(val)
+                first_run.text = prefix + val
 
                 # Subsequent overlapping runs have the matched slice stripped
                 for other_start, other_end, other_run in matching_runs[1:]:
@@ -853,9 +907,9 @@ def write_docx(
         sd = sections_data[0]
         if sd.get("orientation", "").lower() == "landscape":
             sec.orientation = WD_ORIENT.LANDSCAPE
-            w = sec.page_width
-            h = sec.page_height
-            if w < h:
+            w = sec.page_width or Inches(8.5)
+            h = sec.page_height or Inches(11.0)
+            if int(w) < int(h):
                 sec.page_width = h
                 sec.page_height = w
         if sd.get("page_width_cm"):

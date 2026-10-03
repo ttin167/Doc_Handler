@@ -11,13 +11,16 @@ import time
 
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stdout, "reconfigure"):
+            getattr(sys.stdout, "reconfigure")(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            getattr(sys.stderr, "reconfigure")(encoding="utf-8", errors="replace")
     except Exception:
         pass
-
-from .converter_engine import convert_universal, get_pdf_page_count
-
+try:
+    from .converter_engine import convert_universal, get_pdf_page_count
+except (ImportError, ValueError):
+    from converter_engine import convert_universal, get_pdf_page_count
 
 def run_cli() -> int:
     parser = argparse.ArgumentParser(
