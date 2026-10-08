@@ -53,14 +53,45 @@
           <span>Diagram Studio</span>
           <span class="pill-badge">Draw.io / UML</span>
         </button>
+        <button class="nav-tab" data-tab="math">
+          <span class="nav-icon">∑</span>
+          <span>Math Studio</span>
+          <span class="pill-badge">LaTeX to Word</span>
+        </button>
       </nav>
 
       <div class="header-right">
+        <button class="history-toggle-btn" id="btn-toggle-history" title="Xem lịch sử chuyển đổi tệp">
+          <span class="history-icon">🕒</span>
+          <span class="history-label">Lịch Sử</span>
+          <span class="history-badge" id="history-badge-count">0</span>
+        </button>
         <button class="theme-toggle-btn" id="btn-toggle-theme" title="Chuyển đổi giao diện Sáng / Tối">
           <span class="theme-icon">🌙</span>
         </button>
       </div>
     </header>
+
+    <!-- Slide-out History Drawer -->
+    <aside class="history-drawer" id="history-drawer">
+      <div class="history-drawer-header">
+        <div class="history-drawer-title">
+          <span class="icon">🕒</span>
+          <h3>Lịch Sử Chuyển Đổi Tệp</h3>
+        </div>
+        <div class="history-drawer-actions">
+          <button class="btn-clear-history" id="btn-clear-history" title="Xóa toàn bộ lịch sử">Xóa Hết</button>
+          <button class="btn-close-drawer" id="btn-close-history" title="Đóng">✕</button>
+        </div>
+      </div>
+      <div class="history-drawer-body" id="history-list-container">
+        <div class="history-empty" id="history-empty-state">
+          <span class="empty-icon">📂</span>
+          <p>Chưa có tệp nào được xử lý gần đây.</p>
+        </div>
+      </div>
+    </aside>
+    <div class="drawer-backdrop" id="drawer-backdrop"></div>
 
     <!-- Main Workspace Container -->
     <main class="studio-main">
@@ -701,6 +732,109 @@
             <div class="diagram-hint-bar" id="diagram-hint-bar" style="display: none;">
               💡 <span>Mẹo: Chế độ <strong>100% Gốc</strong> hiển thị sắc nét chữ và mũi tên. Giữ chuột kéo để lia sơ đồ
                 (Pan) hoặc dùng phím cuộn.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- =================================================================== -->
+      <!-- TAB 5: MATH & EQUATION STUDIO                                       -->
+      <!-- =================================================================== -->
+      <section class="tab-panel" id="panel-math">
+        <div class="panel-hero">
+          <div class="hero-content">
+            <h1 class="hero-title">Soạn Thảo Công Thức Toán & Xuất Word DOCX</h1>
+            <p class="hero-desc">Trình soạn thảo biểu thức LaTeX toán học và kỹ thuật trực quan. Xem trước công thức thời gian thực và 1-click xuất tệp Word chuẩn Native OMML & OpenXML.</p>
+          </div>
+          <div class="hero-meta">
+            <span class="meta-tag">⚡ Dual-Mode OMML & OpenXML</span>
+            <span class="meta-tag">📐 Phân Số, Căn Thức, Ký Hiệu Hy Lạp</span>
+            <span class="meta-tag">📄 100% Tương Thích Microsoft Word</span>
+          </div>
+        </div>
+
+        <div class="studio-grid">
+          <!-- Left Column: Math Editor & Quick Symbols -->
+          <div class="config-card glass-panel">
+            <h2 class="card-section-title">1. Trình Soạn Thảo Biểu Thức</h2>
+
+            <div class="form-group">
+              <label class="form-label" for="math-doc-title">Tiêu Đề Tài Liệu:</label>
+              <input type="text" id="math-doc-title" class="theme-select text-input-full" value="Báo Cáo Kỹ Thuật &amp; Công Thức Toán" placeholder="Nhập tiêu đề tài liệu Word..." />
+            </div>
+
+            <!-- Quick Symbol Palette -->
+            <div class="math-palette-group">
+              <label class="form-label">Ký Hiệu Nhanh (Nhấp để chèn):</label>
+              <div class="math-symbol-buttons" id="math-symbol-buttons">
+                <button type="button" class="btn-symbol" data-insert="\alpha">α</button>
+                <button type="button" class="btn-symbol" data-insert="\beta">β</button>
+                <button type="button" class="btn-symbol" data-insert="\gamma">γ</button>
+                <button type="button" class="btn-symbol" data-insert="\delta">δ</button>
+                <button type="button" class="btn-symbol" data-insert="\Delta">Δ</button>
+                <button type="button" class="btn-symbol" data-insert="\omega">ω</button>
+                <button type="button" class="btn-symbol" data-insert="\Omega">Ω</button>
+                <button type="button" class="btn-symbol" data-insert="\pi">π</button>
+                <button type="button" class="btn-symbol" data-insert="\sigma">σ</button>
+                <button type="button" class="btn-symbol" data-insert="\approx">≈</button>
+                <button type="button" class="btn-symbol" data-insert="\le">≤</button>
+                <button type="button" class="btn-symbol" data-insert="\ge">≥</button>
+                <button type="button" class="btn-symbol" data-insert="\pm">±</button>
+                <button type="button" class="btn-symbol" data-insert="\cdot">·</button>
+                <button type="button" class="btn-symbol" data-insert="\degree">°</button>
+                <button type="button" class="btn-symbol btn-accent" data-insert="\frac{a}{b}">\frac{a}{b}</button>
+                <button type="button" class="btn-symbol btn-accent" data-insert="\sqrt{x}">\sqrt{x}</button>
+                <button type="button" class="btn-symbol btn-accent" data-insert="x^{2}">x²</button>
+                <button type="button" class="btn-symbol btn-accent" data-insert="v_{ref}">v_ref</button>
+                <button type="button" class="btn-symbol btn-accent" data-insert="\text{m/s}">\text{m/s}</button>
+              </div>
+            </div>
+
+            <!-- Preset Examples -->
+            <div class="form-group">
+              <label class="form-label" for="math-preset-select">Mẫu Công Thức Chuẩn:</label>
+              <select id="math-preset-select" class="theme-select">
+                <option value="kinematics">Vận Tốc &amp; Động Học Robot (Kinematics)</option>
+                <option value="physics">Năng Lượng &amp; Điện Áp (Physics &amp; Power)</option>
+                <option value="calculus">Giải Tích &amp; Đạo Hàm (Calculus &amp; Fraction)</option>
+                <option value="circle">Hình Học &amp; Diện Tích (Geometry)</option>
+              </select>
+            </div>
+
+            <!-- LaTeX Input Textarea -->
+            <div class="form-group">
+              <label class="form-label" for="math-latex-input">Nội Dung Văn Bản Kèm LaTeX ($...$ hoặc $$...$$):</label>
+              <textarea id="math-latex-input" class="code-textarea" rows="7" placeholder="Nhập văn bản kèm công thức toán, ví dụ: Vận tốc góc $\omega = 2\pi f$ và $$v = \frac{\Delta s}{\Delta t}$$"></textarea>
+            </div>
+
+            <button type="button" id="btn-export-math-docx" class="btn-primary-action btn-full">
+              <span class="btn-icon">📥</span>
+              <span class="btn-text">Xuất Tệp Word (.docx) Chuẩn OMML</span>
+            </button>
+          </div>
+
+          <!-- Right Column: Live Preview & Export -->
+          <div class="preview-card glass-panel">
+            <div class="preview-header">
+              <h2 class="card-section-title">2. Xem Trước Trực Quan (Live Preview)</h2>
+              <div class="preview-actions" id="math-download-actions" style="display: none;">
+                <a href="#" class="btn-download-link btn-success" id="btn-download-math-docx" download="Math_Document.docx">
+                  📥 Tải Tệp Word
+                </a>
+              </div>
+            </div>
+
+            <div class="math-preview-container" id="math-preview-container">
+              <div class="math-preview-paper" id="math-preview-paper">
+                <h3 class="preview-paper-title" id="preview-paper-title">Báo Cáo Kỹ Thuật &amp; Công Thức Toán</h3>
+                <div class="preview-paper-content" id="preview-paper-content">
+                  <!-- Live preview content formatted with math -->
+                </div>
+              </div>
+            </div>
+
+            <div class="diagram-hint-bar">
+              💡 <span>Công thức toán học sẽ được biên dịch trực tiếp thành các thẻ <strong>OpenXML Multi-Run</strong> và <strong>Native Office Math (OMML)</strong> cho Microsoft Word.</span>
             </div>
           </div>
         </div>
