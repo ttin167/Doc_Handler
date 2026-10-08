@@ -33,6 +33,11 @@ try:
 except (ImportError, ValueError):
     from smart_post_processor import calculate_heuristic_column_widths
 
+try:
+    from .docx_math import add_math_to_paragraph
+except (ImportError, ValueError):
+    from docx_math import add_math_to_paragraph
+
 def _hex_to_rgb(hex_str: str) -> RGBColor:
     cleaned = hex_str.lstrip("#")
     if len(cleaned) == 6:
@@ -520,6 +525,9 @@ def decoupled_to_docx(
     normal_font.name = font_family
     normal_font.size = Pt(11)
     normal_font.color.rgb = _hex_to_rgb(body_hex)
+    normal_style.paragraph_format.line_spacing = 1.15
+    normal_style.paragraph_format.space_before = Pt(0)
+    normal_style.paragraph_format.space_after = Pt(4)
 
     h_color = _hex_to_rgb(heading_hex)
     for lvl, size in [("Heading 1", Pt(16)), ("Heading 2", Pt(13)), ("Heading 3", Pt(12)), ("Heading 4", Pt(11))]:
@@ -535,13 +543,22 @@ def decoupled_to_docx(
     total_lines = len(lines)
 
     in_table = False
+    in_code_block = False
+    in_signature_block = False
     table_buffer: List[List[str]] = []
+    col_alignments: List[WD_ALIGN_PARAGRAPH] = []
 
     def flush_table():
-        nonlocal in_table, table_buffer
+        nonlocal in_table, table_buffer, col_alignments
         if not table_buffer:
             return
-        col_count = max(len(row) for row in table_buffer)
+        col_count = max((len(row) for row in table_buffer), default=0)
+        if col_count == 0 or len(table_buffer) == 0:
+            table_buffer.clear()
+            col_alignments.clear()
+            in_table = False
+            return
+
         t = doc.add_table(rows=len(table_buffer), cols=col_count)
         t.autofit = False  # Enforce explicit heuristic column geometry
 
@@ -572,25 +589,33 @@ def decoupled_to_docx(
                         cell.width = Inches(col_widths_twips[c_idx] / 1440.0)
 
                     tcPr = cell._tc.get_or_add_tcPr()
+
+                    # ECMA-376 Schema sequence: <w:shd> MUST precede <w:vAlign>
+                    if r_idx == 0:
+                        shading = parse_xml(f'<w:shd {NS_W} w:fill="{header_bg_hex}"/>')
+                        tcPr.append(shading)
+
                     if tcPr.find(qn("w:vAlign")) is None:
                         tcPr.append(parse_xml(f'<w:vAlign {NS_W} w:val="center"/>'))
 
-                    cell.text = val
-                    for cp in cell.paragraphs:
-                        for cr in cp.runs:
-                            cr.font.name = font_family
-                            cr.font.size = Pt(10)
+                    cell.text = ""
+                    cp = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
+                    _add_formatted_runs(cp, val)
+                    cp.paragraph_format.space_before = Pt(2.5)
+                    cp.paragraph_format.space_after = Pt(2.5)
+                    cp.paragraph_format.line_spacing = 1.15
+                    if c_idx < len(col_alignments):
+                        cp.alignment = col_alignments[c_idx]
+                    else:
+                        cp.alignment = WD_ALIGN_PARAGRAPH.CENTER if c_idx == 0 else WD_ALIGN_PARAGRAPH.LEFT
+                    for cr in cp.runs:
+                        cr.font.name = font_family
+                        cr.font.size = Pt(10)
+                        if r_idx == 0:
+                            cr.bold = True
 
-                    if r_idx == 0:
-                        # Apply Peach #FFE8E0 header shading
-                        shading = parse_xml(f'<w:shd {NS_W} w:fill="{header_bg_hex}"/>')
-                        cell._tc.get_or_add_tcPr().append(shading)
-                        for cp in cell.paragraphs:
-                            for cr in cp.runs:
-                                cr.bold = True
-
-        doc.add_paragraph()
         table_buffer.clear()
+        col_alignments.clear()
         in_table = False
 
     for idx, line in enumerate(lines):
@@ -600,14 +625,38 @@ def decoupled_to_docx(
 
         s_line = line.strip()
 
-        # Handle Tables
-        if s_line.startswith("|") and s_line.endswith("|"):
+        # Handle Fenced Code Blocks
+        if s_line.startswith("```"):
+            if in_table:
+                flush_table()
+            in_code_block = not in_code_block
+            continue
+
+        if in_code_block:
+            p_code = doc.add_paragraph()
+            r_code = p_code.add_run(line.rstrip("\r\n"))
+            r_code.font.name = "Consolas"
+            r_code.font.size = Pt(9.5)
+            p_code.paragraph_format.space_before = Pt(1)
+            p_code.paragraph_format.space_after = Pt(1)
+            continue
+
+        # Handle Tables (only when not in code block and has meaningful cells)
+        if s_line.startswith("|") and s_line.endswith("|") and len(s_line) > 1 and "|" in s_line[1:-1]:
             parts = [p.strip() for p in s_line.split("|")[1:-1]]
             if not in_table:
                 in_table = True
                 table_buffer.append(parts)
             else:
                 if all(re.match(r"^[-:]+$", p) for p in parts):
+                    col_alignments.clear()
+                    for p_al in parts:
+                        if p_al.startswith(":") and p_al.endswith(":"):
+                            col_alignments.append(WD_ALIGN_PARAGRAPH.CENTER)
+                        elif p_al.endswith(":"):
+                            col_alignments.append(WD_ALIGN_PARAGRAPH.RIGHT)
+                        else:
+                            col_alignments.append(WD_ALIGN_PARAGRAPH.LEFT)
                     continue
                 table_buffer.append(parts)
             continue
@@ -650,29 +699,74 @@ def decoupled_to_docx(
             _apply_tab_stop_to_paragraph(p_toc, title_p, page_p, font_name=font_family, tab_pos_twips=tab_pos_twips)
             continue
 
+        # Horizontal Rule (Divider)
+        if s_line == "---":
+            continue
+
         # Headings
         if s_line.startswith("# "):
-            doc.add_heading(s_line[2:].strip(), level=1)
+            h = doc.add_heading(s_line[2:].strip(), level=1)
+            h.paragraph_format.space_before = Pt(14)
+            h.paragraph_format.space_after = Pt(6)
+            h.paragraph_format.keep_with_next = True
         elif s_line.startswith("## "):
-            doc.add_heading(s_line[3:].strip(), level=2)
+            h = doc.add_heading(s_line[3:].strip(), level=2)
+            h.paragraph_format.space_before = Pt(12)
+            h.paragraph_format.space_after = Pt(4)
+            h.paragraph_format.keep_with_next = True
         elif s_line.startswith("### "):
-            doc.add_heading(s_line[4:].strip(), level=3)
+            h = doc.add_heading(s_line[4:].strip(), level=3)
+            h.paragraph_format.space_before = Pt(8)
+            h.paragraph_format.space_after = Pt(3)
+            h.paragraph_format.keep_with_next = True
         elif s_line.startswith("#### "):
-            doc.add_heading(s_line[5:].strip(), level=4)
+            h = doc.add_heading(s_line[5:].strip(), level=4)
+            h.paragraph_format.space_before = Pt(6)
+            h.paragraph_format.space_after = Pt(2)
+            h.paragraph_format.keep_with_next = True
         elif s_line.startswith("- ") or s_line.startswith("* "):
             p = doc.add_paragraph(style="List Bullet")
             _add_formatted_runs(p, s_line[2:].strip())
-            p.paragraph_format.space_before = Pt(2)
-            p.paragraph_format.space_after = Pt(2)
+            p.paragraph_format.line_spacing = 1.15
+            p.paragraph_format.space_before = Pt(1.5)
+            p.paragraph_format.space_after = Pt(1.5)
+            if len(s_line) > 75:
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         elif re.match(r"^\d+\.\s+", s_line):
             text_val = re.sub(r"^\d+\.\s+", "", s_line)
             p = doc.add_paragraph(style="List Number")
             _add_formatted_runs(p, text_val)
+            p.paragraph_format.line_spacing = 1.15
             p.paragraph_format.space_before = Pt(2)
             p.paragraph_format.space_after = Pt(2)
+            if len(s_line) > 75:
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
         else:
             p = doc.add_paragraph()
             _add_formatted_runs(p, s_line)
+            p.paragraph_format.line_spacing = 1.15
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(4)
+            if s_line.startswith("$$") and s_line.endswith("$$"):
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.space_before = Pt(6)
+                p.paragraph_format.space_after = Pt(6)
+
+            # Detect Signature block at the end
+            if "NGƯỜI LẬP KẾ HOẠCH" in s_line:
+                in_signature_block = True
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                p.paragraph_format.space_before = Pt(14)
+            elif in_signature_block:
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                if "(Đã ký)" in s_line:
+                    p.paragraph_format.space_after = Pt(18)  # Leave room for signature
+            elif s_line.startswith("**Kính gửi:") or s_line.startswith("**Ứng viên:") or s_line.startswith("**Vị trí") or s_line.startswith("**Tài liệu") or s_line.startswith("**Thời điểm") or s_line.startswith("**Email:"):
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            elif len(s_line) > 60:
+                p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            else:
+                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     if in_table:
         flush_table()
@@ -716,8 +810,17 @@ def _apply_tab_stop_to_paragraph(
 
 
 def _add_formatted_runs(p: docx.text.paragraph.Paragraph, text: str) -> None:
-    """Parse inline Markdown bold and italic tokens into docx runs."""
-    tokens = re.split(r"(\*\*.*?\*\*|\*.*?\*)", text)
+    """Parse inline Markdown links, line breaks, backticks, bold, italic, and LaTeX math into docx runs."""
+    cleaned_text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
+    cleaned_text = re.sub(r"<br\s*/?>", "\n", cleaned_text)
+    cleaned_text = re.sub(r"`(.*?)`", r"\1", cleaned_text)
+    cleaned_text = cleaned_text.replace("`", "")
+
+    if "$" in cleaned_text:
+        add_math_to_paragraph(p, cleaned_text)
+        return
+
+    tokens = re.split(r"(\*\*.*?\*\*|\*.*?\*)", cleaned_text)
     for token in tokens:
         if token.startswith("**") and token.endswith("**") and len(token) >= 4:
             r = p.add_run(token[2:-2])

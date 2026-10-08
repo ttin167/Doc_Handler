@@ -193,6 +193,12 @@ Khi bắt đầu làm bất kỳ tác vụ nào thuộc domain dưới đây, **
 | `PPTX_INV_06` | **Clean Native Tables** | Bảng trong PPTX phải dùng `<p:graphicFrame>` bảng chuẩn, có header fill rõ ràng và căn lề phải cho cột số liệu. |
 | `PPTX_INV_07` | **Windows File Lock Guard** | Khi file `.pptx` đang bị khóa do mở trong Microsoft PowerPoint, script tự động lưu ra file tạm `_updated.pptx` kèm cảnh báo thay vì làm crash chương trình. |
 | `PPTX_INV_08` | **Presenter Notes Preservation** | Giữ nguyên hoặc cho phép định nghĩa ghi chú thuyết trình qua trường `"notes"` trong JSON hoặc Markdown `<!-- note: ... -->`. |
+| `PPTX_INV_09` | **Run-Level Formatting Supremacy** | CẤM gán `b="1"`, `b="0"` hay `<a:solidFill>` vào `<a:defRPr>`. Toàn bộ thuộc tính Bold và màu sắc phải đặt ở `<a:rPr>` để tránh khóa chết thanh Ribbon và Color Picker của PowerPoint. |
+| `PPTX_INV_10` | **Default Pure Black Typography** | Mọi subtitle, card header, caption, và số trang mặc định dùng đen thuần `#000000`. CẤM ép cứng màu xanh đen (`#0F294A`) hay xám xanh (`#475569`/`#64748B`), trao toàn quyền đổi màu cho người dùng. |
+| `PPTX_INV_11` | **Slide Numbering Freedom** | Số trang thiết lập trực tiếp tại `<a:rPr sz="1200" b="0" i="0"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:rPr>`, lề an toàn cách mép phải/dưới $\approx 0.4$–$0.5$ in, người dùng tự do chỉnh font, màu, bật/tắt in đậm. |
+| `PPTX_INV_12` | **Native DrawingML Math Subscript** | Ký hiệu vật lý/công thức ($v_{\text{ref}} = 0\text{ m/s}$) dùng Native DrawingML Subscript (`baseline="-25000"`, `i="1"` cho biến số, `b="0"` cho đơn vị). CẤM chèn raw `<a14:m>` gây hỏng namespace. |
+| `PPTX_INV_13` | **AlternateContent Ghost Shape Pruning** | Khi thay thế hoặc cập nhật card/shape kỹ thuật, bắt buộc duyệt `spTree` dọn sạch khối `<mc:AlternateContent>` cũ nằm ngầm phía sau, ngăn chặn ghost data và mã màu rác. |
+
 
 ---
 

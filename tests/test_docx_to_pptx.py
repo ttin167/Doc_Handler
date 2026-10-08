@@ -86,11 +86,12 @@ class TestDocxToPptxPipeline(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_theme_registration(self):
-        """Validates thesis_blue theme exists with Tahoma font and Royal Blue colors."""
+        """Validates thesis_blue theme exists with Tahoma font, Pure Black title (PPTX_INV_10), and Royal Blue accent."""
         self.assertIn("thesis_blue", THEMES)
         theme = THEMES["thesis_blue"]
         self.assertEqual(theme["font_heading"], "Tahoma")
-        self.assertEqual(theme["title_color"], (0, 81, 226))
+        self.assertEqual(theme["title_color"], (0, 0, 0))
+        self.assertEqual(theme["accent_color"], (0, 81, 226))
 
     def test_extract_docx_structure(self):
         """Validates AST extraction of chapters, subsections, tables, and images."""

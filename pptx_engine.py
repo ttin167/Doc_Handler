@@ -34,6 +34,8 @@ try:
         init_presentation,
         safe_save_pptx,
         get_theme,
+        sanitize_openxml_presentation,
+        set_paragraph_text_clean,
     )
 except (ImportError, ValueError):
     from pptx_writer import (  # type: ignore
@@ -51,7 +53,14 @@ except (ImportError, ValueError):
         init_presentation,
         safe_save_pptx,
         get_theme,
+        sanitize_openxml_presentation,
+        set_paragraph_text_clean,
     )
+
+try:
+    from .pptx_math import add_math_text_to_paragraph, parse_inline_math
+except (ImportError, ValueError):
+    from pptx_math import add_math_text_to_paragraph, parse_inline_math  # type: ignore
 
 
 def parse_markdown_to_slides_spec(md_text: str, default_theme: str = "corporate_blue") -> Dict[str, Any]:

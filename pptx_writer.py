@@ -25,6 +25,10 @@ try:
 except ImportError:
     Image = None  # type: ignore
 
+from lxml import etree
+from pptx.oxml import parse_xml
+from pptx.oxml.ns import nsdecls
+
 import pptx
 from pptx import Presentation
 from pptx.presentation import Presentation as PresentationType
@@ -43,9 +47,9 @@ SLIDE_HEIGHT_IN = 7.5
 THEMES: Dict[str, Dict[str, Any]] = {
     "corporate_blue": {
         "bg_color": RGBColor(248, 250, 252),        # #f8fafc
-        "title_color": RGBColor(15, 41, 74),        # #0f294a Navy
-        "subtitle_color": RGBColor(71, 85, 105),    # #475569 Slate
-        "text_color": RGBColor(30, 41, 59),         # #1e293b Charcoal
+        "title_color": RGBColor(0, 0, 0),           # Pure Black (PPTX_INV_10)
+        "subtitle_color": RGBColor(0, 0, 0),        # Pure Black (PPTX_INV_10)
+        "text_color": RGBColor(0, 0, 0),            # Pure Black (PPTX_INV_10)
         "accent_color": RGBColor(37, 99, 235),      # #2563eb Cobalt Blue
         "accent_light": RGBColor(239, 246, 255),    # #eff6ff Blue-50
         "card_bg": RGBColor(255, 255, 255),         # #ffffff
@@ -67,9 +71,9 @@ THEMES: Dict[str, Dict[str, Any]] = {
     },
     "academic_light": {
         "bg_color": RGBColor(255, 255, 255),        # #ffffff
-        "title_color": RGBColor(30, 41, 59),        # #1e293b
-        "subtitle_color": RGBColor(71, 85, 105),    # #475569
-        "text_color": RGBColor(51, 65, 85),         # #334155
+        "title_color": RGBColor(0, 0, 0),           # Pure Black (PPTX_INV_10)
+        "subtitle_color": RGBColor(0, 0, 0),        # Pure Black (PPTX_INV_10)
+        "text_color": RGBColor(0, 0, 0),            # Pure Black (PPTX_INV_10)
         "accent_color": RGBColor(2, 132, 199),      # #0284c7 Sky-600
         "accent_light": RGBColor(240, 249, 255),    # #f0f9ff
         "card_bg": RGBColor(248, 250, 252),         # #f8fafc
@@ -79,9 +83,9 @@ THEMES: Dict[str, Dict[str, Any]] = {
     },
     "thesis_blue": {
         "bg_color": RGBColor(248, 250, 252),        # #f8fafc
-        "title_color": RGBColor(0, 81, 226),        # #0051e2 Royal Blue
-        "subtitle_color": RGBColor(0, 81, 226),     # #0051e2 Royal Blue
-        "text_color": RGBColor(30, 41, 59),         # #1e293b Charcoal
+        "title_color": RGBColor(0, 0, 0),           # Pure Black (PPTX_INV_10)
+        "subtitle_color": RGBColor(0, 0, 0),        # Pure Black (PPTX_INV_10)
+        "text_color": RGBColor(0, 0, 0),            # Pure Black (PPTX_INV_10)
         "accent_color": RGBColor(0, 81, 226),       # #0051e2 Royal Blue
         "accent_light": RGBColor(239, 246, 255),    # #eff6ff Blue-50
         "card_bg": RGBColor(255, 255, 255),         # #ffffff
@@ -97,6 +101,164 @@ def get_theme(theme_name: str) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# OpenXML Sanitization & Text Helpers (PPTX_INV_09 - 13)
+# ---------------------------------------------------------------------------
+
+A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+
+
+def set_paragraph_text_clean(
+    paragraph: Any,
+    text: str,
+    font_size_pt: float = 14.0,
+    is_bold: bool = False,
+    is_italic: bool = False,
+    color: Optional[Union[RGBColor, str]] = None,
+    font_name: str = "Arial"
+) -> Any:
+    """
+    Populates a paragraph with text runs conforming strictly to PPTX_INV_09 (Run-Level Formatting
+    Supremacy) and PPTX_INV_10 (Default Pure Black Typography).
+    Supports inline LaTeX math ($...$) via pptx_math.
+    """
+    # 1. Clean existing runs in paragraph to prevent ghost runs
+    for r in list(paragraph._p.findall(f'.//{{{A_NS}}}r')):
+        paragraph._p.remove(r)
+
+    # 2. Strip defRPr bold/color locks from paragraph
+    pPr = paragraph._p.find(f'{{{A_NS}}}pPr')
+    if pPr is not None:
+        defRPr = pPr.find(f'{{{A_NS}}}defRPr')
+        if defRPr is not None:
+            if 'b' in defRPr.attrib:
+                del defRPr.attrib['b']
+            if 'i' in defRPr.attrib:
+                del defRPr.attrib['i']
+            for sf in defRPr.findall(f'{{{A_NS}}}solidFill'):
+                defRPr.remove(sf)
+
+    hex_clr = "000000"
+    if isinstance(color, RGBColor):
+        hex_clr = f"{color[0]:02X}{color[1]:02X}{color[2]:02X}"
+    elif isinstance(color, str):
+        hex_clr = color.lstrip("#")
+
+    if "$" in text:
+        try:
+            from .pptx_math import add_math_text_to_paragraph
+        except (ImportError, ValueError):
+            from pptx_math import add_math_text_to_paragraph  # type: ignore
+        add_math_text_to_paragraph(
+            paragraph,
+            text,
+            base_sz=int(round(font_size_pt * 100)),
+            is_bold=is_bold,
+            color=hex_clr,
+            typeface=font_name
+        )
+        return paragraph
+    else:
+        run = paragraph.add_run()
+        run.text = text
+        run.font.name = font_name
+        run.font.size = Pt(font_size_pt)
+        run.font.bold = is_bold
+        run.font.italic = is_italic
+        if isinstance(color, RGBColor):
+            run.font.color.rgb = color
+        elif isinstance(color, str):
+            h = color.lstrip("#")
+            run.font.color.rgb = RGBColor(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        else:
+            run.font.color.rgb = RGBColor(0, 0, 0)
+        return run
+
+
+def sanitize_openxml_presentation(prs: Any) -> int:
+    """
+    Sanitizes an entire PowerPoint presentation against DrawingML / OpenXML defects.
+    Conforms to:
+    - PPTX_INV_09: Run-Level Formatting Supremacy (strips b="1", b="0", solidFill from defRPr)
+    - PPTX_INV_10: Default Pure Black Typography (replaces legacy palette #0F294A, #475569 with #000000)
+    - PPTX_INV_11: Slide Numbering Freedom (sets clean run-level black 12pt Arial formatting)
+    - PPTX_INV_13: AlternateContent Ghost Shape Pruning (removes orphan AlternateContent blocks)
+    """
+    sanitized_count = 0
+    for slide in prs.slides:
+        # 1. Prune ghost AlternateContent in spTree (PPTX_INV_13)
+        sp_tree = slide._element.spTree
+        for child in list(sp_tree):
+            if child.tag.endswith('AlternateContent'):
+                xml_str = etree.tostring(child).decode('utf-8', errors='ignore')
+                if '0F294A' in xml_str.upper() or '475569' in xml_str.upper() or 'PTC' in xml_str:
+                    sp_tree.remove(child)
+                    sanitized_count += 1
+
+        # 2. Inspect all shapes for slide numbers (PPTX_INV_11)
+        for shape in slide.shapes:
+            if 'slide number' in shape.name.lower() or 'date placeholder' in shape.name.lower() or (
+                shape.has_text_frame and shape.text.strip().isdigit() and len(shape.text.strip()) <= 3 and shape.name.startswith('Slide Number')
+            ) or (shape.is_placeholder and hasattr(shape, 'placeholder_format') and shape.placeholder_format.type == 12):
+                for p in shape._element.findall(f'.//{{{A_NS}}}p'):
+                    pPr = p.find(f'{{{A_NS}}}pPr')
+                    if pPr is not None:
+                        defRPr = pPr.find(f'{{{A_NS}}}defRPr')
+                        if defRPr is not None:
+                            for sf in defRPr.findall(f'{{{A_NS}}}solidFill'):
+                                defRPr.remove(sf)
+                                sanitized_count += 1
+                            if 'b' in defRPr.attrib:
+                                del defRPr.attrib['b']
+                                sanitized_count += 1
+                            if 'i' in defRPr.attrib:
+                                del defRPr.attrib['i']
+                    for r in p.findall(f'{{{A_NS}}}r'):
+                        rPr = r.find(f'{{{A_NS}}}rPr')
+                        if rPr is None:
+                            rPr = parse_xml(f'<a:rPr {nsdecls("a")}/>')
+                            r.insert(0, rPr)
+                        rPr.set('sz', '1200')
+                        rPr.set('b', '0')
+                        rPr.set('i', '0')
+                        for sf in rPr.findall(f'{{{A_NS}}}solidFill'):
+                            rPr.remove(sf)
+                        rPr.append(parse_xml(f'<a:solidFill {nsdecls("a")}><a:srgbClr val="000000"/></a:solidFill>'))
+                        for lat in rPr.findall(f'{{{A_NS}}}latin'):
+                            rPr.remove(lat)
+                        rPr.append(parse_xml(f'<a:latin {nsdecls("a")} typeface="Arial"/>'))
+                        sanitized_count += 1
+
+        # 3. Universal Slide Paragraph Sanitization (PPTX_INV_09 & PPTX_INV_10)
+        for p in slide._element.findall(f'.//{{{A_NS}}}p'):
+            pPr = p.find(f'{{{A_NS}}}pPr')
+            if pPr is not None:
+                defRPr = pPr.find(f'{{{A_NS}}}defRPr')
+                if defRPr is not None:
+                    if 'b' in defRPr.attrib:
+                        del defRPr.attrib['b']
+                        sanitized_count += 1
+                    if 'i' in defRPr.attrib:
+                        del defRPr.attrib['i']
+                    for sf in defRPr.findall(f'{{{A_NS}}}solidFill'):
+                        for clr in sf.findall(f'.//{{{A_NS}}}srgbClr'):
+                            if clr.attrib.get('val', '').upper() in ['0F294A', '475569', '64748B']:
+                                defRPr.remove(sf)
+                                sanitized_count += 1
+                                break
+
+            # Clean runs: replace legacy hardcoded navy/slate colors in rPr with pure black
+            for r in p.findall(f'{{{A_NS}}}r'):
+                rPr = r.find(f'{{{A_NS}}}rPr')
+                if rPr is not None:
+                    for clr in rPr.findall(f'.//{{{A_NS}}}srgbClr'):
+                        if clr.attrib.get('val', '').upper() in ['0F294A', '475569']:
+                            clr.attrib['val'] = '000000'
+                            sanitized_count += 1
+
+    return sanitized_count
+
+
+# ---------------------------------------------------------------------------
 # Resilience & File Lock Management
 # ---------------------------------------------------------------------------
 
@@ -104,7 +266,11 @@ def safe_save_pptx(prs: PresentationType, target_path: str) -> str:
     """
     Saves a PowerPoint presentation. If the target file is locked by MS PowerPoint,
     gracefully saves to a timestamped or fallback path to prevent crash (PPTX_INV_07).
+    Automatically runs OpenXML pre-save sanitization to enforce PPTX_INV_09, 10, 11, 13.
     """
+    # Enforce OpenXML Invariants before saving
+    sanitize_openxml_presentation(prs)
+
     target_path = os.path.abspath(target_path)
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
@@ -190,10 +356,22 @@ def _format_bullet_paragraph(
     bullet_color: Optional[RGBColor] = None,
     body_color: Optional[RGBColor] = None,
 ) -> None:
-    """Formats bullet paragraph with high-contrast prefix runs and zero text overflow."""
+    """Formats bullet paragraph with high-contrast prefix runs, inline math support, and zero text overflow."""
     p.space_after = Pt(max(3.0, font_size_pt * 0.35))
     p.line_spacing = 1.15
     p.alignment = PP_ALIGN.LEFT
+
+    # Strip any defRPr locks
+    pPr = p._p.find(f'{{{A_NS}}}pPr')
+    if pPr is not None:
+        defRPr = pPr.find(f'{{{A_NS}}}defRPr')
+        if defRPr is not None:
+            if 'b' in defRPr.attrib:
+                del defRPr.attrib['b']
+            if 'i' in defRPr.attrib:
+                del defRPr.attrib['i']
+            for sf in defRPr.findall(f'{{{A_NS}}}solidFill'):
+                defRPr.remove(sf)
 
     prefix = ""
     body = ""
@@ -237,21 +415,55 @@ def _format_bullet_paragraph(
 
     # Prefix run (bold)
     if prefix:
-        r_pre = p.add_run()
-        clean_pre = prefix.rstrip(":")
-        r_pre.text = clean_pre + ": "
-        r_pre.font.name = theme.get("font_body", "Calibri")
-        r_pre.font.size = Pt(eff_size)
-        r_pre.font.bold = True
-        r_pre.font.color.rgb = prefix_color or theme.get("title_color", RGBColor(15, 41, 74))
+        clean_pre = prefix.rstrip(":") + ": "
+        if "$" in clean_pre:
+            try:
+                from .pptx_math import add_math_text_to_paragraph
+            except (ImportError, ValueError):
+                from pptx_math import add_math_text_to_paragraph  # type: ignore
+            add_math_text_to_paragraph(
+                p,
+                clean_pre,
+                base_sz=int(round(eff_size * 100)),
+                is_bold=True,
+                color="000000" if prefix_color is None else (
+                    f"{prefix_color[0]:02X}{prefix_color[1]:02X}{prefix_color[2]:02X}"
+                    if isinstance(prefix_color, RGBColor) else str(prefix_color).lstrip("#")
+                ),
+                typeface=theme.get("font_body", "Calibri")
+            )
+        else:
+            r_pre = p.add_run()
+            r_pre.text = clean_pre
+            r_pre.font.name = theme.get("font_body", "Calibri")
+            r_pre.font.size = Pt(eff_size)
+            r_pre.font.bold = True
+            r_pre.font.color.rgb = prefix_color or theme.get("title_color", RGBColor(0, 0, 0))
 
-    # Body run (regular)
-    r_body = p.add_run()
-    r_body.text = body
-    r_body.font.name = theme.get("font_body", "Calibri")
-    r_body.font.size = Pt(eff_size)
-    r_body.font.bold = False
-    r_body.font.color.rgb = body_color or theme.get("text_color", RGBColor(30, 41, 59))
+    # Body run (regular, with math parsing if $ present)
+    if "$" in body:
+        try:
+            from .pptx_math import add_math_text_to_paragraph
+        except (ImportError, ValueError):
+            from pptx_math import add_math_text_to_paragraph  # type: ignore
+        add_math_text_to_paragraph(
+            p,
+            body,
+            base_sz=int(round(eff_size * 100)),
+            is_bold=False,
+            color="000000" if body_color is None else (
+                f"{body_color[0]:02X}{body_color[1]:02X}{body_color[2]:02X}"
+                if isinstance(body_color, RGBColor) else str(body_color).lstrip("#")
+            ),
+            typeface=theme.get("font_body", "Calibri")
+        )
+    else:
+        r_body = p.add_run()
+        r_body.text = body
+        r_body.font.name = theme.get("font_body", "Calibri")
+        r_body.font.size = Pt(eff_size)
+        r_body.font.bold = False
+        r_body.font.color.rgb = body_color or theme.get("text_color", RGBColor(0, 0, 0))
 
 
 def _clean_slide_content(slide: Any) -> None:
@@ -275,15 +487,25 @@ def _clean_slide_content(slide: Any) -> None:
 
 
 def _update_slide_number(slide: Any, num: int, theme: Dict[str, Any]) -> None:
-    """Updates slide number placeholder if present."""
+    """Updates slide number placeholder conforming strictly to PPTX_INV_11 (Slide Numbering Freedom)."""
     for sh in slide.shapes:
         if 'Slide Number' in sh.name or (sh.is_placeholder and hasattr(sh, 'placeholder_format') and sh.placeholder_format.type == 12):
-            sh.text_frame.text = str(num)
-            if len(sh.text_frame.paragraphs) > 0:
-                p = sh.text_frame.paragraphs[0]
-                p.font.size = Pt(11)
-                p.font.name = theme.get("font_body", "Calibri")
-                p.font.color.rgb = theme.get("subtitle_color", RGBColor(71, 85, 105))
+            tf = sh.text_frame
+            tf.clear()
+            p = tf.paragraphs[0]
+            # Strip defRPr lock
+            pPr = p._p.find(f'{{{A_NS}}}pPr')
+            if pPr is not None:
+                defRPr = pPr.find(f'{{{A_NS}}}defRPr')
+                if defRPr is not None:
+                    pPr.remove(defRPr)
+            run = p.add_run()
+            run.text = str(num)
+            run.font.name = "Arial"
+            run.font.size = Pt(12)
+            run.font.bold = False
+            run.font.italic = False
+            run.font.color.rgb = RGBColor(0, 0, 0)
 
 
 def _prepare_slide(
@@ -324,11 +546,11 @@ def _add_slide_header(
             tf_b.margin_left = Inches(0)
             tf_b.margin_top = Inches(0)
             p_b = tf_b.paragraphs[0]
-            p_b.text = banner
-            p_b.font.name = theme.get("font_heading", "Tahoma")
-            p_b.font.size = Pt(24)
-            p_b.font.bold = True
-            p_b.font.color.rgb = theme.get("accent_color", RGBColor(0, 81, 226))
+            set_paragraph_text_clean(
+                p_b, banner, font_size_pt=24, is_bold=True,
+                color=theme.get("accent_color", RGBColor(0, 81, 226)),
+                font_name=theme.get("font_heading", "Tahoma")
+            )
 
             # Title positioned below banner with exact 28pt bold
             tb_title = slide.shapes.add_textbox(Inches(0.8), Inches(0.89), Inches(11.85), Inches(0.65))
@@ -337,18 +559,19 @@ def _add_slide_header(
             tf_t.margin_left = Inches(0)
             tf_t.margin_top = Inches(0)
             p_t = tf_t.paragraphs[0]
-            p_t.text = title
-            p_t.font.name = theme.get("font_heading", "Tahoma")
-            p_t.font.size = Pt(28)
-            p_t.font.bold = True
-            p_t.font.color.rgb = theme.get("title_color", RGBColor(15, 41, 74))
+            set_paragraph_text_clean(
+                p_t, title, font_size_pt=28, is_bold=True,
+                color=theme.get("title_color", RGBColor(0, 0, 0)),
+                font_name=theme.get("font_heading", "Tahoma")
+            )
 
             if subtitle:
                 p_sub = tf_t.add_paragraph()
-                p_sub.text = subtitle
-                p_sub.font.name = theme["font_body"]
-                p_sub.font.size = Pt(13)
-                p_sub.font.color.rgb = theme["subtitle_color"]
+                set_paragraph_text_clean(
+                    p_sub, subtitle, font_size_pt=13, is_bold=False,
+                    color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+                    font_name=theme.get("font_body", "Calibri")
+                )
                 return 1.85
             return 1.66
         else:
@@ -359,12 +582,12 @@ def _add_slide_header(
             tf_b.margin_left = Inches(0)
             tf_b.margin_top = Inches(0)
             p_b = tf_b.paragraphs[0]
-            p_b.text = banner
-            p_b.font.name = theme["font_heading"]
-            p_b.font.size = Pt(20)
-            p_b.font.bold = True
-            p_b.font.color.rgb = theme["accent_color"]
             p_b.alignment = PP_ALIGN.CENTER
+            set_paragraph_text_clean(
+                p_b, banner, font_size_pt=20, is_bold=True,
+                color=theme.get("accent_color", RGBColor(0, 81, 226)),
+                font_name=theme.get("font_heading", "Tahoma")
+            )
 
             tb_sub = slide.shapes.add_textbox(Inches(0.8), Inches(0.8), Inches(11.733), Inches(0.7))
             tf_s = tb_sub.text_frame
@@ -372,19 +595,20 @@ def _add_slide_header(
             tf_s.margin_left = Inches(0)
             tf_s.margin_top = Inches(0)
             p_s = tf_s.paragraphs[0]
-            p_s.text = title
-            p_s.font.name = theme["font_heading"]
-            p_s.font.size = Pt(28)
-            p_s.font.bold = True
-            p_s.font.color.rgb = theme["title_color"]
+            set_paragraph_text_clean(
+                p_s, title, font_size_pt=28, is_bold=True,
+                color=theme.get("title_color", RGBColor(0, 0, 0)),
+                font_name=theme.get("font_heading", "Tahoma")
+            )
 
             if subtitle:
                 p2 = tf_s.add_paragraph()
-                p2.text = subtitle
-                p2.font.name = theme["font_body"]
-                p2.font.size = Pt(13)
-                p2.font.color.rgb = theme["subtitle_color"]
                 p2.space_before = Pt(3)
+                set_paragraph_text_clean(
+                    p2, subtitle, font_size_pt=13, is_bold=False,
+                    color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+                    font_name=theme.get("font_body", "Calibri")
+                )
                 return 1.85
             return 1.66
     else:
@@ -395,19 +619,20 @@ def _add_slide_header(
         tf.margin_top = Inches(0)
 
         p = tf.paragraphs[0]
-        p.text = title
-        p.font.name = theme["font_heading"]
-        p.font.size = Pt(28)
-        p.font.bold = True
-        p.font.color.rgb = theme["title_color"]
+        set_paragraph_text_clean(
+            p, title, font_size_pt=28, is_bold=True,
+            color=theme.get("title_color", RGBColor(0, 0, 0)),
+            font_name=theme.get("font_heading", "Tahoma")
+        )
 
         if subtitle:
             p2 = tf.add_paragraph()
-            p2.text = subtitle
-            p2.font.name = theme["font_body"]
-            p2.font.size = Pt(13)
-            p2.font.color.rgb = theme["subtitle_color"]
             p2.space_before = Pt(4)
+            set_paragraph_text_clean(
+                p2, subtitle, font_size_pt=13, is_bold=False,
+                color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+                font_name=theme.get("font_body", "Calibri")
+            )
             return 1.9
         return 1.7
 
@@ -445,20 +670,21 @@ def add_title_slide(
 
     # Title
     p_title = tf.paragraphs[0]
-    p_title.text = title
-    p_title.font.name = theme["font_heading"]
-    p_title.font.size = Pt(40)
-    p_title.font.bold = True
-    p_title.font.color.rgb = theme["title_color"]
+    set_paragraph_text_clean(
+        p_title, title, font_size_pt=40, is_bold=True,
+        color=theme.get("title_color", RGBColor(0, 0, 0)),
+        font_name=theme["font_heading"]
+    )
 
     # Subtitle
     if subtitle:
         p_sub = tf.add_paragraph()
-        p_sub.text = subtitle
-        p_sub.font.name = theme["font_body"]
-        p_sub.font.size = Pt(20)
-        p_sub.font.color.rgb = theme["subtitle_color"]
         p_sub.space_before = Pt(14)
+        set_paragraph_text_clean(
+            p_sub, subtitle, font_size_pt=20, is_bold=False,
+            color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_body"]
+        )
 
     # Presenter & Meta info
     meta_parts = []
@@ -469,12 +695,12 @@ def add_title_slide(
 
     if meta_parts:
         p_meta = tf.add_paragraph()
-        p_meta.text = "  |  ".join(meta_parts)
-        p_meta.font.name = theme["font_body"]
-        p_meta.font.size = Pt(14)
-        p_meta.font.color.rgb = theme["accent_color"]
-        p_meta.font.bold = True
         p_meta.space_before = Pt(28)
+        set_paragraph_text_clean(
+            p_meta, "  |  ".join(meta_parts), font_size_pt=14, is_bold=True,
+            color=theme.get("accent_color", RGBColor(0, 81, 226)),
+            font_name=theme["font_body"]
+        )
 
     return slide
 
@@ -507,29 +733,30 @@ def add_chapter_slide(
 
     # Chapter Number / Category
     p_num = tf.paragraphs[0]
-    p_num.text = chapter_num.upper()
-    p_num.font.name = theme["font_heading"]
-    p_num.font.size = Pt(18)
-    p_num.font.bold = True
-    p_num.font.color.rgb = theme["accent_color"]
+    set_paragraph_text_clean(
+        p_num, chapter_num.upper(), font_size_pt=18, is_bold=True,
+        color=theme.get("accent_color", RGBColor(0, 81, 226)),
+        font_name=theme["font_heading"]
+    )
 
     # Chapter Title
     p_title = tf.add_paragraph()
-    p_title.text = title
-    p_title.font.name = theme["font_heading"]
-    p_title.font.size = Pt(36)
-    p_title.font.bold = True
-    p_title.font.color.rgb = theme["title_color"]
     p_title.space_before = Pt(10)
+    set_paragraph_text_clean(
+        p_title, title, font_size_pt=36, is_bold=True,
+        color=theme.get("title_color", RGBColor(0, 0, 0)),
+        font_name=theme["font_heading"]
+    )
 
     # Subtitle
     if subtitle:
         p_sub = tf.add_paragraph()
-        p_sub.text = subtitle
-        p_sub.font.name = theme["font_body"]
-        p_sub.font.size = Pt(16)
-        p_sub.font.color.rgb = theme["subtitle_color"]
         p_sub.space_before = Pt(12)
+        set_paragraph_text_clean(
+            p_sub, subtitle, font_size_pt=16, is_bold=False,
+            color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_body"]
+        )
 
     return slide
 
@@ -721,12 +948,12 @@ def add_diagram_slide(
         tf = cap_box.text_frame
         tf.word_wrap = True
         p_cap = tf.paragraphs[0]
-        p_cap.text = caption
         p_cap.alignment = PP_ALIGN.CENTER
-        p_cap.font.name = theme["font_body"]
-        p_cap.font.size = Pt(11)
-        p_cap.font.italic = True
-        p_cap.font.color.rgb = theme["subtitle_color"]
+        set_paragraph_text_clean(
+            p_cap, caption, font_size_pt=11.5, is_italic=True,
+            color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_body"]
+        )
 
     return slide
 
@@ -812,12 +1039,12 @@ def add_split_diagram_slide(
         tf_c = cap_box.text_frame
         tf_c.word_wrap = True
         p_c = tf_c.paragraphs[0]
-        p_c.text = caption
         p_c.alignment = PP_ALIGN.CENTER
-        p_c.font.name = theme["font_body"]
-        p_c.font.size = Pt(11.5)
-        p_c.font.italic = True
-        p_c.font.color.rgb = theme["subtitle_color"]
+        set_paragraph_text_clean(
+            p_c, caption, font_size_pt=11.5, is_italic=True,
+            color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_body"]
+        )
 
     return slide
 
@@ -902,12 +1129,12 @@ def add_dual_diagram_slide(
                     tf_c = cb.text_frame
                     tf_c.word_wrap = True
                     p_c = tf_c.paragraphs[0]
-                    p_c.text = cap
                     p_c.alignment = PP_ALIGN.CENTER
-                    p_c.font.name = theme["font_body"]
-                    p_c.font.size = Pt(11)
-                    p_c.font.italic = True
-                    p_c.font.color.rgb = theme["subtitle_color"]
+                    set_paragraph_text_clean(
+                        p_c, cap, font_size_pt=11.0, is_italic=True,
+                        color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+                        font_name=theme["font_body"]
+                    )
     else:
         # Vertical stacking
         sub_gap = 0.30
@@ -928,12 +1155,12 @@ def add_dual_diagram_slide(
                     tf_c.margin_top = 0
                     tf_c.margin_bottom = 0
                     p_c = tf_c.paragraphs[0]
-                    p_c.text = cap
                     p_c.alignment = PP_ALIGN.CENTER
-                    p_c.font.name = theme["font_body"]
-                    p_c.font.size = Pt(11)
-                    p_c.font.italic = True
-                    p_c.font.color.rgb = theme["subtitle_color"]
+                    set_paragraph_text_clean(
+                        p_c, cap, font_size_pt=11.0, is_italic=True,
+                        color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+                        font_name=theme["font_body"]
+                    )
 
     return slide
 
@@ -996,12 +1223,14 @@ def add_metrics_summary_slide(
 
         # Card Title
         p0 = tf.paragraphs[0]
-        p0.text = cdata.get("title", f"Module {i+1}")
-        p0.font.name = theme["font_heading"]
-        p0.font.size = Pt(17 if count <= 3 else 15)
-        p0.font.bold = True
-        p0.font.color.rgb = theme["accent_color"]
         p0.space_after = Pt(8)
+        set_paragraph_text_clean(
+            p0, cdata.get("title", f"Module {i+1}"),
+            font_size_pt=(17 if count <= 3 else 15),
+            is_bold=True,
+            color=theme.get("accent_color", RGBColor(0, 81, 226)),
+            font_name=theme["font_heading"]
+        )
 
         # Metrics / rows
         metrics = cdata.get("metrics", cdata.get("bullets", []))
@@ -1068,51 +1297,52 @@ def add_thank_you_slide(
     tf.clear()
 
     p1 = tf.paragraphs[0]
-    p1.text = title
     p1.alignment = PP_ALIGN.CENTER
-    p1.font.name = theme["font_heading"]
-    p1.font.size = Pt(36)
-    p1.font.bold = True
-    p1.font.color.rgb = theme["accent_color"]
     p1.space_after = Pt(16)
+    set_paragraph_text_clean(
+        p1, title, font_size_pt=36, is_bold=True,
+        color=theme.get("accent_color", RGBColor(0, 81, 226)),
+        font_name=theme["font_heading"]
+    )
 
     if subtitle:
         p2 = tf.add_paragraph()
-        p2.text = subtitle
         p2.alignment = PP_ALIGN.CENTER
-        p2.font.name = theme["font_heading"]
-        p2.font.size = Pt(22)
-        p2.font.bold = True
-        p2.font.color.rgb = theme["title_color"]
         p2.space_after = Pt(20)
+        set_paragraph_text_clean(
+            p2, subtitle, font_size_pt=22, is_bold=True,
+            color=theme.get("title_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_heading"]
+        )
 
     if presenter:
         p3 = tf.add_paragraph()
-        p3.text = presenter
         p3.alignment = PP_ALIGN.CENTER
-        p3.font.name = theme["font_body"]
-        p3.font.size = Pt(21)
-        p3.font.color.rgb = theme["text_color"]
         p3.space_after = Pt(8)
+        set_paragraph_text_clean(
+            p3, presenter, font_size_pt=21, is_bold=False,
+            color=theme.get("text_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_body"]
+        )
 
     if advisor:
         p4 = tf.add_paragraph()
-        p4.text = advisor
         p4.alignment = PP_ALIGN.CENTER
-        p4.font.name = theme["font_body"]
-        p4.font.size = Pt(21)
-        p4.font.color.rgb = theme["text_color"]
         p4.space_after = Pt(20)
+        set_paragraph_text_clean(
+            p4, advisor, font_size_pt=21, is_bold=False,
+            color=theme.get("text_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_body"]
+        )
 
     if qa_text:
         p5 = tf.add_paragraph()
-        p5.text = qa_text
         p5.alignment = PP_ALIGN.CENTER
-        p5.font.name = theme["font_heading"]
-        p5.font.size = Pt(25)
-        p5.font.bold = True
-        p5.font.italic = True
-        p5.font.color.rgb = theme["accent_color"]
+        set_paragraph_text_clean(
+            p5, qa_text, font_size_pt=25, is_bold=True, is_italic=True,
+            color=theme.get("accent_color", RGBColor(0, 81, 226)),
+            font_name=theme["font_heading"]
+        )
 
     return slide
 
@@ -1157,29 +1387,31 @@ def add_kpi_cards_slide(
         tf.margin_top = Inches(0.4)
 
         p_title = tf.paragraphs[0]
-        p_title.text = cdata.get("title", f"Metric {i+1}").upper()
-        p_title.font.name = theme["font_heading"]
-        p_title.font.size = Pt(12)
-        p_title.font.bold = True
-        p_title.font.color.rgb = theme["subtitle_color"]
         p_title.space_after = Pt(12)
+        set_paragraph_text_clean(
+            p_title, cdata.get("title", f"Metric {i+1}").upper(),
+            font_size_pt=12, is_bold=True,
+            color=theme.get("subtitle_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_heading"]
+        )
 
         val_str = cdata.get("value", "0")
         p_val = tf.add_paragraph()
-        p_val.text = val_str
-        p_val.font.name = theme["font_heading"]
-        p_val.font.size = Pt(36)
-        p_val.font.bold = True
-        p_val.font.color.rgb = theme["accent_color"]
         p_val.space_after = Pt(10)
+        set_paragraph_text_clean(
+            p_val, val_str, font_size_pt=36, is_bold=True,
+            color=theme.get("accent_color", RGBColor(0, 81, 226)),
+            font_name=theme["font_heading"]
+        )
 
         desc_str = cdata.get("description", cdata.get("desc", ""))
         if desc_str:
             p_desc = tf.add_paragraph()
-            p_desc.text = desc_str
-            p_desc.font.name = theme["font_body"]
-            p_desc.font.size = Pt(13)
-            p_desc.font.color.rgb = theme["text_color"]
+            set_paragraph_text_clean(
+                p_desc, desc_str, font_size_pt=13, is_bold=False,
+                color=theme.get("text_color", RGBColor(0, 0, 0)),
+                font_name=theme["font_body"]
+            )
 
     return slide
 
@@ -1232,20 +1464,23 @@ def add_grid_cards_slide(
         tf.margin_bottom = Inches(0.14)
 
         p_t = tf.paragraphs[0]
-        p_t.text = cdata.get("title", f"Item {idx+1}")
-        p_t.font.name = theme["font_heading"]
-        p_t.font.size = Pt(13 if cols >= 4 else 15)
-        p_t.font.bold = True
-        p_t.font.color.rgb = theme["title_color"]
+        set_paragraph_text_clean(
+            p_t, cdata.get("title", f"Item {idx+1}"),
+            font_size_pt=(13 if cols >= 4 else 15), is_bold=True,
+            color=theme.get("title_color", RGBColor(0, 0, 0)),
+            font_name=theme["font_heading"]
+        )
 
         desc = cdata.get("description", cdata.get("desc", ""))
         if desc:
             p_d = tf.add_paragraph()
-            p_d.text = desc
-            p_d.font.name = theme["font_body"]
-            p_d.font.size = Pt(10 if cols >= 4 else 12)
-            p_d.font.color.rgb = theme["text_color"]
             p_d.space_before = Pt(3)
+            set_paragraph_text_clean(
+                p_d, desc,
+                font_size_pt=(10 if cols >= 4 else 12), is_bold=False,
+                color=theme.get("text_color", RGBColor(0, 0, 0)),
+                font_name=theme["font_body"]
+            )
 
     return slide
 
@@ -1279,12 +1514,12 @@ def add_table_slide(
         cell.fill.solid()
         cell.fill.fore_color.rgb = theme["title_color"]
         p = cell.text_frame.paragraphs[0]
-        p.text = h_text
-        p.font.name = theme["font_heading"]
-        p.font.bold = True
-        p.font.size = Pt(14)
-        p.font.color.rgb = RGBColor(255, 255, 255)
         p.alignment = PP_ALIGN.CENTER
+        set_paragraph_text_clean(
+            p, h_text, font_size_pt=14, is_bold=True,
+            color=RGBColor(255, 255, 255),
+            font_name=theme["font_heading"]
+        )
 
     # Format Data Rows
     for row_idx, r_data in enumerate(rows):
@@ -1297,13 +1532,13 @@ def add_table_slide(
             cell.fill.fore_color.rgb = row_bg
             val = r_data[col_idx] if col_idx < len(r_data) else ""
             p = cell.text_frame.paragraphs[0]
-            p.text = str(val)
-            p.font.name = theme["font_body"]
-            p.font.size = Pt(12)
-            p.font.color.rgb = theme["text_color"]
             if col_idx > 0 and str(val).replace('.', '', 1).isdigit():
                 p.alignment = PP_ALIGN.RIGHT
-
+            set_paragraph_text_clean(
+                p, str(val), font_size_pt=12, is_bold=False,
+                color=theme.get("text_color", RGBColor(0, 0, 0)),
+                font_name=theme["font_body"]
+            )
     return slide
 
 

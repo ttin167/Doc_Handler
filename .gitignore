@@ -51,4 +51,11 @@ scratch/
 *_temp_assets/
 test_out_assets/
 tools/archive/
+
+# Personal & User Capstone documents (exclude thesis, defense slides, private files)
+docs/
+*.docx
+*.pptx
+*.pdf
+*.xlsx
 .agent_scratchpad.md

@@ -47,6 +47,11 @@ try:
 except (ImportError, ValueError):
     from smart_post_processor import calculate_heuristic_column_widths
 
+try:
+    from .docx_math import add_math_to_paragraph
+except (ImportError, ValueError):
+    from docx_math import add_math_to_paragraph
+
 __all__ = [
     "write_docx",
     "write_docx_from_json_file",
@@ -260,7 +265,7 @@ def _set_row_flags(tr_elem, is_header: bool = False, cant_split: bool = True) ->
 # ---------------------------------------------------------------------------
 
 def _write_paragraph(doc: DocumentType, para_data: dict[str, Any], anchor_para=None) -> Any:
-    """Writes a styled paragraph with run-level formatting."""
+    """Writes a styled paragraph with run-level formatting and LaTeX math expressions."""
     style_name = para_data.get("style_name", "Normal")
     style = _resolve_style(doc, style_name)
     if anchor_para is not None:
@@ -270,12 +275,28 @@ def _write_paragraph(doc: DocumentType, para_data: dict[str, Any], anchor_para=N
 
     _apply_paragraph_format(para, para_data)
 
-    for run_data in para_data.get("runs", []):
-        run = para.add_run(run_data.get("text", ""))
-        _apply_run_format(run, run_data)
-
-    if not para_data.get("runs") and para_data.get("text"):
-        para.add_run(para_data["text"])
+    runs = para_data.get("runs", [])
+    if runs:
+        for run_data in runs:
+            text = str(run_data.get("text", ""))
+            if "$" in text:
+                add_math_to_paragraph(
+                    para,
+                    text,
+                    base_font_size_pt=float(run_data.get("font_size_pt") or 11.0),
+                    font_name=str(run_data.get("font_name") or "Arial"),
+                    color_rgb=_hex_to_rgb(run_data.get("font_color")),
+                    bold=bool(run_data.get("bold", False))
+                )
+            else:
+                run = para.add_run(text)
+                _apply_run_format(run, run_data)
+    elif para_data.get("text"):
+        raw_text = str(para_data["text"])
+        if "$" in raw_text:
+            add_math_to_paragraph(para, raw_text)
+        else:
+            para.add_run(raw_text)
 
     return para
 
@@ -542,27 +563,58 @@ def _write_table(doc: DocumentType, table_data: dict[str, Any], anchor_para=None
                     _apply_paragraph_format(p, para_data)
 
                     for run_data in para_data.get("runs", []):
-                        run = p.add_run(run_data.get("text", ""))
-                        _apply_run_format(run, run_data)
-                        if is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399"):
-                            if not run_data.get("font_color"):
-                                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                                run.bold = True
+                        text = str(run_data.get("text", ""))
+                        if "$" in text:
+                            add_math_to_paragraph(
+                                p,
+                                text,
+                                base_font_size_pt=float(run_data.get("font_size_pt") or 10.0),
+                                font_name=str(run_data.get("font_name") or "Arial"),
+                                color_rgb=RGBColor(0xFF, 0xFF, 0xFF) if (is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399") and not run_data.get("font_color")) else _hex_to_rgb(run_data.get("font_color")),
+                                bold=True if (is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399")) else bool(run_data.get("bold", False))
+                            )
+                        else:
+                            run = p.add_run(text)
+                            _apply_run_format(run, run_data)
+                            if is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399"):
+                                if not run_data.get("font_color"):
+                                    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                                    run.bold = True
 
                     if not para_data.get("runs") and para_data.get("text"):
-                        run = p.add_run(para_data["text"])
-                        if is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399"):
-                            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                            run.bold = True
+                        raw_text = str(para_data["text"])
+                        if "$" in raw_text:
+                            add_math_to_paragraph(
+                                p,
+                                raw_text,
+                                base_font_size_pt=10.0,
+                                color_rgb=RGBColor(0xFF, 0xFF, 0xFF) if (is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399")) else None,
+                                bold=True if (is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399")) else False
+                            )
+                        else:
+                            run = p.add_run(raw_text)
+                            if is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399"):
+                                run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                                run.bold = True
             elif cell_data.get("text") is not None:
                 p = target_cell.add_paragraph()
                 p.alignment = _ALIGN_MAP.get(str(cell_data.get("alignment", "LEFT")).upper(), WD_ALIGN_PARAGRAPH.LEFT)
-                run = p.add_run(str(cell_data["text"]))
-                if is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399"):
-                    run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-                    run.bold = True
-                elif cell_data.get("font_bold"):
-                    run.bold = True
+                raw_cell_txt = str(cell_data["text"])
+                if "$" in raw_cell_txt:
+                    add_math_to_paragraph(
+                        p,
+                        raw_cell_txt,
+                        base_font_size_pt=10.0,
+                        color_rgb=RGBColor(0xFF, 0xFF, 0xFF) if (is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399")) else None,
+                        bold=True if (is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399")) else bool(cell_data.get("font_bold"))
+                    )
+                else:
+                    run = p.add_run(raw_cell_txt)
+                    if is_header_row and fill_color in ("#1F4E78", "#2C3E50", "#000080", "#333399"):
+                        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+                        run.bold = True
+                    elif cell_data.get("font_bold"):
+                        run.bold = True
 
             # Ensure ERR_DOCX_001
             _ensure_cell_has_paragraph(tc)
